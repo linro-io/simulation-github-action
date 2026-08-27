@@ -1,42 +1,84 @@
-# Move the major-version tag when a release is published.
+# Verify the major-version tag after a release, and say exactly how to fix it.
 #
 # Actions are consumed as `uses: linro-io/simulation-action@v1`, so `v1` has to
 # keep pointing at the newest v1.x.y — that is the contract a caller pins
-# against. Without this, every consumer would have to bump an exact tag to get
-# a fix, and most simply would not.
+# against. Without it, every consumer would have to bump an exact tag to get a
+# fix, and most simply would not.
 #
-# The exact tag (v1.2.3) is created by the release itself and never moves, so
-# anyone wanting full reproducibility pins that instead.
+# WHY THIS DOES NOT MOVE THE TAG ITSELF. It used to try, and it cannot: the
+# linro-io organisation has an IP allow list, and GitHub-hosted runners are not
+# on it. The runner can READ this repository but any write is refused:
+#
+#   remote: The repository owner has an IP allow list enabled, and
+#           4.236.166.146 is not permitted to access this repository.
+#   fatal: unable to access '...': The requested URL returned error: 403
+#
+# That is the same wall for `git push` and for the REST API — same identity,
+# same blocked address — so there is no runner-side way to move the tag, and a
+# workflow that pretends otherwise just fails on every release. A self-hosted
+# runner would be on the allow list, and must not be used: this is a public
+# repository, where a fork's pull request would then run on our hardware.
+#
+# So the tag is moved from a machine on the allow list, and this workflow's job
+# is to make sure nobody forgets — a release whose major tag still points at the
+# previous version is invisible to everyone pinning @v1.
 name: Release
 
 on:
   release:
     types: [published]
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  retag:
+  verify-major-tag:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Point the major tag at this release
+      - name: The major tag must point at this release
         env:
           TAG: ${{ github.event.release.tag_name }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
         run: |
           set -euo pipefail
+
+          if [ -z "${TAG:-}" ]; then
+            echo "::notice::no release tag in the event (manual run); nothing to verify"
+            exit 0
+          fi
           case "$TAG" in
             v[0-9]*) ;;
-            *) echo "::notice::${TAG} is not a vN.N.N tag; leaving major tags alone"; exit 0 ;;
+            *)
+              echo "::notice::${TAG} is not a vN.N.N tag; major tags do not apply"
+              exit 0
+              ;;
           esac
           major="${TAG%%.*}"
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # -f: the whole point is that this tag moves.
-          git tag -f "$major" "$TAG"
-          git push -f origin "$major"
-          echo "${major} → ${TAG}"
+
+          # Read the remote WITHOUT credentials. The repository is public, so an
+          # anonymous read needs no token — and a token is exactly what the IP
+          # allow list refuses from this runner.
+          want=$(git ls-remote "$REPO_URL" "refs/tags/${TAG}"    | cut -f1)
+          have=$(git ls-remote "$REPO_URL" "refs/tags/${major}"  | cut -f1)
+
+          if [ -z "$want" ]; then
+            echo "::error::${TAG} does not exist on the remote, which should be impossible for a published release."
+            exit 1
+          fi
+          if [ "$want" = "$have" ]; then
+            echo "${major} → ${TAG} (${want})"
+            exit 0
+          fi
+
+          if [ -z "$have" ]; then
+            echo "::error::${major} does not exist. Everyone pinning @${major} cannot resolve this action at all."
+          else
+            echo "::error::${major} still points at ${have}, not at ${TAG} (${want}). Everyone pinning @${major} is on the previous release."
+          fi
+          echo "Move it from a machine on the linro-io IP allow list:"
+          echo ""
+          echo "  git fetch origin --tags"
+          echo "  git tag -f ${major} ${TAG}"
+          echo "  git push -f origin ${major}"
+          exit 1
