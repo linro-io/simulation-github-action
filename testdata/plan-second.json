@@ -1,0 +1,41 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.0",
+  "resource_changes": [
+    {
+      "address": "aws_s3_bucket.demo2",
+      "mode": "managed",
+      "type": "aws_s3_bucket",
+      "name": "demo2",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "after": {
+          "bucket": "linro-action-selftest-second",
+          "tags": {}
+        }
+      }
+    },
+    {
+      "address": "aws_s3_bucket_public_access_block.demo2",
+      "mode": "managed",
+      "type": "aws_s3_bucket_public_access_block",
+      "name": "demo2",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "after": {
+          "bucket": "linro-action-selftest-second",
+          "block_public_acls": false,
+          "block_public_policy": false,
+          "ignore_public_acls": false,
+          "restrict_public_buckets": false
+        }
+      }
+    }
+  ]
+}

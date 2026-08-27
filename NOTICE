@@ -1,0 +1,20 @@
+Linro Simulation — GitHub Action
+Copyright 2026 Linro GmbH
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+WHAT THIS COVERS
+----------------
+This repository only: the action definition (action.yml), its documentation,
+its tests and its fixtures. It is a wrapper that downloads and runs the Linro
+Simulator CLI.
+
+WHAT IT DOES NOT COVER
+----------------------
+The Linro Simulator CLI ("linro-simulator"), which this action downloads at
+runtime, is NOT licensed under Apache-2.0. It is proprietary software of Linro
+GmbH, distributed through the Linro marketplace under its own end-user licence,
+and it requires a Linro install and a valid access token to do anything.
+
+Nothing in this repository grants any right in the CLI, in the Linro platform,
+or in the Linro name or marks beyond the trademark provisions of Apache-2.0.

@@ -1,0 +1,429 @@
+# Linro simulation for GitHub Actions.
+#
+# A composite action, not a Docker one, for three reasons that matter to the
+# people using it:
+#
+#   - it runs on macOS runners as well as Linux (a Docker action cannot),
+#   - there is no image to pull on every run, and
+#   - there is no second artifact to keep in lockstep with each CLI release.
+#     The previous incarnation of this action was a Docker image with the
+#     binary baked in, and it silently went two majors stale.
+#
+# The CLI is downloaded from the Linro marketplace, which is also where a
+# customer's own installs get it. That is deliberate: the marketplace only
+# serves a version once it has been ingested and promoted, so this action can
+# never run a build that no install could actually offer.
+#
+# Every flag `linro-simulator simulate` accepts is a first-class input here.
+# `extra-args` exists for flags added to the CLI after an action release, not
+# as the normal way to reach anything listed below.
+name: Linro Simulation
+description: >-
+  Simulate Terraform plans and Pulumi previews against your Linro install and
+  get the policy verdict as a pull-request check, before you apply.
+author: Linro
+
+branding:
+  icon: shield
+  color: blue
+
+inputs:
+  # ---- what to simulate ----------------------------------------------------
+  # Both are repeatable and they COMBINE: every source becomes its own resource
+  # group in ONE simulation with one verdict. Any number, any mix.
+  plan:
+    description: >-
+      Path to a `terraform show -json` plan document. Repeatable: put one path
+      per line, and every plan is simulated. Combined with `preview`, all
+      sources become ONE simulation with one verdict.
+    required: false
+    default: ""
+  preview:
+    description: >-
+      Path to a `pulumi preview --json` document. One path per line, as `plan`.
+    required: false
+    default: ""
+  opentofu:
+    description: >-
+      Label every `plan` source as opentofu rather than terraform. The plan
+      format is identical; this only changes the tool recorded against the
+      resource group, which is what the simulation is reported under.
+    required: false
+    default: "false"
+  native:
+    description: >-
+      Force the aws-native (CloudFormation) dialect for every `preview` source.
+    required: false
+    default: "false"
+
+  # ---- where to send it ----------------------------------------------------
+  server:
+    description: >-
+      Your Linro install, e.g. https://acme.linro.app. Required unless
+      `dry-run` is true.
+    required: false
+    default: ""
+  token:
+    description: >-
+      A Linro Personal Access Token with the SCOPE_SIMULATIONS scope. Pass it
+      from a secret — never inline. Required unless `dry-run` is true.
+    required: false
+    default: ""
+  ca-cert:
+    description: >-
+      Path to a PEM bundle to trust in addition to the system roots, for an
+      install behind an internal CA.
+    required: false
+    default: ""
+  insecure:
+    description: >-
+      Use a plaintext (non-TLS) connection. The CLI permits this ONLY for a
+      loopback server and refuses it for anything else, so it is useful on a
+      self-hosted runner sharing a host with an install, and useless on a
+      GitHub-hosted one. Your token would otherwise cross the network in clear.
+    required: false
+    default: "false"
+
+  # ---- scope ---------------------------------------------------------------
+  # A Terraform plan carries its provider config, so account/region are often
+  # recoverable from the plan itself. A Pulumi preview carries none, so these
+  # are how a preview gets scoped at all.
+  account:
+    description: AWS account id the resources deploy to.
+    required: false
+    default: ""
+  region:
+    description: AWS region the resources deploy to.
+    required: false
+    default: ""
+  project:
+    description: GCP project id the resources deploy to.
+    required: false
+    default: ""
+  stack-export:
+    description: >-
+      Path to a `pulumi stack export` document, used to recover the AWS account
+      and region a preview cannot carry. Pulumi sources only. This is a scope
+      hint, not a source — its resources are not simulated.
+    required: false
+    default: ""
+  allow-mock-account:
+    description: >-
+      Submit even when no account could be resolved. Every resource identity is
+      then derived from a placeholder account, so the simulation cannot match
+      anything in your real inventory. For trying the pipeline out, not for a
+      gate.
+    required: false
+    default: "false"
+
+  # ---- behaviour -----------------------------------------------------------
+  label:
+    description: >-
+      Name for this simulation. On a pull request it becomes the CHECK RUN
+      name, so give each simulation in a workflow its own label — two sharing
+      one label race for the same check run.
+    required: false
+    default: "linro-simulate"
+  integration:
+    description: >-
+      How the result comes back. `github-ci` (default) delivers it as a check
+      run on the pull request. `cli` polls for the result and prints it, which
+      is what you want on a push or a schedule.
+    required: false
+    default: "github-ci"
+  strict:
+    description: >-
+      Fail the step if any resource could NOT be simulated. Partial coverage
+      otherwise passes quietly, which is the failure mode worth gating on.
+    required: false
+    default: "false"
+  dry-run:
+    description: >-
+      Assemble the payload and print it instead of submitting. Needs no server
+      and no token — useful for seeing exactly what a simulation would send.
+    required: false
+    default: "false"
+  poll-timeout:
+    description: How long to wait for a result on the `cli` integration (e.g. 5m).
+    required: false
+    default: ""
+  allow-provider-mismatch:
+    description: >-
+      Proceed despite a Pulumi AWS provider major-version skew against the
+      bridged name map. Attributes may be silently dropped, so a simulation
+      that passes under this flag is weaker evidence than one that does not.
+    required: false
+    default: "false"
+  gateway-oidc-audience:
+    description: >-
+      Override the audience the GitHub Actions OIDC token is minted for.
+      Normally leave unset: the install is asked for its own value, so it
+      cannot drift from what its gateway enforces. Only used with
+      `integration: github-ci`.
+    required: false
+    default: ""
+  debug:
+    description: Enable debug logging, including the full request/response trace.
+    required: false
+    default: "false"
+  project-dir:
+    description: >-
+      IaC project directory, used to resolve the source location (file and
+      line) reported against each resource. This is about the ORIGINAL sources;
+      `working-directory` is where the plan/preview paths resolve from.
+    required: false
+    default: ""
+  working-directory:
+    description: Directory to resolve the plan/preview paths from.
+    required: false
+    default: "."
+  extra-args:
+    description: >-
+      Additional flags appended to the command, space-separated. An escape
+      hatch for flags newer than this action — if you need it often, open an
+      issue, because a first-class input is better than a string.
+    required: false
+    default: ""
+
+  # ---- where the CLI comes from -------------------------------------------
+  version:
+    description: >-
+      linro-simulator version to run, e.g. v0.2.1, or `latest` to track the
+      newest version your marketplace serves. Pinning is recommended: `latest`
+      makes a green run stop being evidence about any particular version.
+
+      The default is only ever raised to a version PRODUCTION serves. A default
+      that exists in staging but not production would 404 on every customer's
+      first run, which is the worst possible first impression.
+    required: false
+    default: "v0.2.1"
+  marketplace-url:
+    description: >-
+      Marketplace to download the CLI from. Override only if your Linro
+      deployment serves its own.
+    required: false
+    default: "https://marketplace.linro.io"
+
+outputs:
+  version:
+    description: The linro-simulator version that ran (resolved, without the leading v).
+    value: ${{ steps.install.outputs.version }}
+  binary-path:
+    description: Absolute path to the downloaded linro-simulator binary.
+    value: ${{ steps.install.outputs.binary-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install linro-simulator
+      id: install
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_MARKETPLACE_URL: ${{ inputs.marketplace-url }}
+      run: |
+        set -euo pipefail
+
+        # RUNNER_OS/RUNNER_ARCH are the only portable identity the runner
+        # gives us; map them onto the marketplace's platform names.
+        case "$RUNNER_OS" in
+          Linux)  os=linux ;;
+          macOS)  os=darwin ;;
+          *)
+            echo "::error::linro-simulator has no ${RUNNER_OS} build. This action runs on Linux and macOS runners."
+            exit 1
+            ;;
+        esac
+        case "$RUNNER_ARCH" in
+          X64)   arch=amd64 ;;
+          ARM64) arch=arm64 ;;
+          *)
+            echo "::error::unsupported runner architecture ${RUNNER_ARCH} (expected X64 or ARM64)."
+            exit 1
+            ;;
+        esac
+
+        # The catalog stores a bare semver; the release tag people quote carries
+        # a leading v. Accept either. `latest` is an alias resolved server-side,
+        # and has no v to strip.
+        version="${INPUT_VERSION#v}"
+        url="${INPUT_MARKETPLACE_URL}/artifacts/simulators/linro-simulator/${version}/${os}-${arch}.tar.gz"
+
+        dir="${RUNNER_TEMP}/linro-simulator"
+        mkdir -p "$dir"
+
+        # Separate "cannot reach the marketplace" from "that version is not in
+        # it". They need opposite fixes, and reporting the first as the second
+        # sends people to chase a release that is already published.
+        set +e
+        http=$(curl -sSL --retry 3 --retry-connrefused --max-time 300 \
+          -o "${dir}/linro-simulator.tar.gz" -w '%{http_code}' "$url")
+        rc=$?
+        set -e
+
+        if [ "$rc" -ne 0 ]; then
+          echo "::error::could not reach ${INPUT_MARKETPLACE_URL} (curl exit ${rc}). This is a network failure, not a missing version."
+          exit 1
+        fi
+        case "$http" in
+          200) ;;
+          410)
+            # A retraction is not a typo. Saying "check the version exists"
+            # here sends someone to confirm a version that does exist and was
+            # deliberately withdrawn — usually for a defect worth knowing about.
+            echo "::error::linro-simulator ${INPUT_VERSION} has been RETRACTED and is no longer served. Pin a different version."
+            exit 1
+            ;;
+          *)
+            echo "::error::${INPUT_MARKETPLACE_URL} answered HTTP ${http} for linro-simulator ${INPUT_VERSION} (${os}-${arch})."
+            echo "Check the version exists in your marketplace catalog, and that the platform is one it publishes."
+            exit 1
+            ;;
+        esac
+
+        # The release tarball wraps everything in one directory named after the
+        # build (linro-simulator-vX.Y.Z-os-arch/), carrying the binary, its
+        # LICENCE and its third-party notices.
+        tar -xzf "${dir}/linro-simulator.tar.gz" -C "$dir" --strip-components=1
+        chmod +x "${dir}/linro-simulator"
+        echo "$dir" >> "$GITHUB_PATH"
+
+        echo "version=${version}" >> "$GITHUB_OUTPUT"
+        echo "binary-path=${dir}/linro-simulator" >> "$GITHUB_OUTPUT"
+        "${dir}/linro-simulator" version
+
+    - name: Simulate
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        # Through env: rather than interpolated into the script. An input that
+        # reaches the shell as text can end a quote and start a command; as an
+        # environment variable it is only ever data.
+        LINRO_SIMULATION_TOKEN: ${{ inputs.token }}
+        INPUT_PLAN: ${{ inputs.plan }}
+        INPUT_PREVIEW: ${{ inputs.preview }}
+        INPUT_OPENTOFU: ${{ inputs.opentofu }}
+        INPUT_NATIVE: ${{ inputs.native }}
+        INPUT_SERVER: ${{ inputs.server }}
+        INPUT_CA_CERT: ${{ inputs.ca-cert }}
+        INPUT_INSECURE: ${{ inputs.insecure }}
+        INPUT_ACCOUNT: ${{ inputs.account }}
+        INPUT_REGION: ${{ inputs.region }}
+        INPUT_PROJECT: ${{ inputs.project }}
+        INPUT_STACK_EXPORT: ${{ inputs.stack-export }}
+        INPUT_ALLOW_MOCK_ACCOUNT: ${{ inputs.allow-mock-account }}
+        INPUT_LABEL: ${{ inputs.label }}
+        INPUT_INTEGRATION: ${{ inputs.integration }}
+        INPUT_STRICT: ${{ inputs.strict }}
+        INPUT_DRY_RUN: ${{ inputs.dry-run }}
+        INPUT_POLL_TIMEOUT: ${{ inputs.poll-timeout }}
+        INPUT_ALLOW_PROVIDER_MISMATCH: ${{ inputs.allow-provider-mismatch }}
+        INPUT_GATEWAY_OIDC_AUDIENCE: ${{ inputs.gateway-oidc-audience }}
+        INPUT_DEBUG: ${{ inputs.debug }}
+        INPUT_PROJECT_DIR: ${{ inputs.project-dir }}
+        INPUT_EXTRA_ARGS: ${{ inputs.extra-args }}
+      run: |
+        set -euo pipefail
+
+        args=()
+
+        # Actions inputs are ALWAYS strings, so a boolean is whatever the caller
+        # typed. Accepting only "true" and treating everything else as false
+        # means `strict: True` silently disables the gate it was added to
+        # enforce — a CI check that passes because it stopped checking. Refuse
+        # anything that is not unambiguously one or the other.
+        want() {
+          case "$2" in
+            true|True|TRUE)    return 0 ;;
+            false|False|FALSE) return 1 ;;
+            "")                return 1 ;;
+            *)
+              echo "::error::the ${1} input must be true or false, got '${2}'"
+              exit 1
+              ;;
+          esac
+        }
+
+        # Repeatable inputs. GitHub Actions has no list type, so the convention
+        # is one path per line. Blank lines are ignored (a YAML block scalar
+        # ends in a newline, and people separate groups with them), and each
+        # line is trimmed — a block scalar indents its content, and an indented
+        # path is the same path.
+        add_sources() {
+          local flag="$1" raw="$2" line
+          while IFS= read -r line; do
+            line="${line#"${line%%[![:space:]]*}"}"
+            line="${line%"${line##*[![:space:]]}"}"
+            if [ -n "$line" ]; then
+              args+=("$flag" "$line")
+            fi
+          done <<< "$raw"
+        }
+
+        add_sources --plan "$INPUT_PLAN"
+        add_sources --preview "$INPUT_PREVIEW"
+
+        # Single-quoted: inside a double-quoted string a backtick starts
+        # command substitution, so "set `plan`" would try to RUN plan.
+        if [ ${#args[@]} -eq 0 ]; then
+          echo '::error::nothing to simulate — set the plan input, the preview input, or both.'
+          exit 1
+        fi
+
+        # Source-dialect flags. Both apply to every source of their kind, which
+        # is why they are not per-path.
+        if want opentofu "$INPUT_OPENTOFU"; then args+=(--opentofu); fi
+        if want native   "$INPUT_NATIVE";   then args+=(--native);   fi
+
+        if want dry-run "$INPUT_DRY_RUN"; then
+          args+=(--dry-run)
+        else
+          # Only enforced for a real submission: a dry run needs neither, and
+          # demanding them would make the cheapest way to try this action the
+          # one that asks for a token first.
+          if [ -z "$INPUT_SERVER" ]; then
+            echo '::error::the server input is required (or set dry-run: true).'
+            exit 1
+          fi
+          if [ -z "${LINRO_SIMULATION_TOKEN}" ]; then
+            echo '::error::the token input is required (or set dry-run: true). Pass a Linro PAT with SCOPE_SIMULATIONS from a secret.'
+            exit 1
+          fi
+          args+=(--server "$INPUT_SERVER" --integration "$INPUT_INTEGRATION")
+          if [ -n "$INPUT_POLL_TIMEOUT" ]; then args+=(--poll-timeout "$INPUT_POLL_TIMEOUT"); fi
+          if [ -n "$INPUT_CA_CERT" ]; then args+=(--ca-cert "$INPUT_CA_CERT"); fi
+          if want insecure "$INPUT_INSECURE"; then args+=(--insecure); fi
+          # Empty means "ask the install", which is the right default and not
+          # the same as passing an empty audience.
+          if [ -n "$INPUT_GATEWAY_OIDC_AUDIENCE" ]; then
+            args+=(--gateway-oidc-audience "$INPUT_GATEWAY_OIDC_AUDIENCE")
+          fi
+        fi
+
+        # if/then rather than `[ cond ] && args+=(...)`: under `set -e` a false
+        # test as the last command of a list becomes the script's exit status,
+        # so the script would end on whichever optional input happened to be
+        # last and unset.
+        if [ -n "$INPUT_ACCOUNT" ];      then args+=(--account "$INPUT_ACCOUNT"); fi
+        if [ -n "$INPUT_REGION" ];       then args+=(--region "$INPUT_REGION"); fi
+        if [ -n "$INPUT_PROJECT" ];      then args+=(--project "$INPUT_PROJECT"); fi
+        if [ -n "$INPUT_STACK_EXPORT" ]; then args+=(--stack-export "$INPUT_STACK_EXPORT"); fi
+        if [ -n "$INPUT_PROJECT_DIR" ];  then args+=(--project-dir "$INPUT_PROJECT_DIR"); fi
+        if [ -n "$INPUT_LABEL" ];        then args+=(--label "$INPUT_LABEL"); fi
+
+        if want strict                  "$INPUT_STRICT";                  then args+=(--strict); fi
+        if want debug                   "$INPUT_DEBUG";                   then args+=(--debug); fi
+        if want allow-mock-account      "$INPUT_ALLOW_MOCK_ACCOUNT";      then args+=(--allow-mock-account); fi
+        if want allow-provider-mismatch "$INPUT_ALLOW_PROVIDER_MISMATCH"; then args+=(--allow-provider-mismatch); fi
+
+        # Word-split on purpose: this is a flag string, and the alternative is
+        # asking people to encode a list in an input that has no list type.
+        if [ -n "$INPUT_EXTRA_ARGS" ]; then
+          # shellcheck disable=SC2206
+          args+=($INPUT_EXTRA_ARGS)
+        fi
+
+        # Safe to echo: the token rides in the environment, never in argv —
+        # which is also why it cannot leak through `ps` on the runner.
+        echo "+ linro-simulator simulate ${args[*]}"
+        linro-simulator simulate "${args[@]}"

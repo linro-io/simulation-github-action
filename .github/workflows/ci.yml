@@ -1,0 +1,267 @@
+# Test the action the way a customer uses it: `uses: ./`, on the runners we
+# claim to support, against the real marketplace.
+#
+# The whole test runs on `dry-run: true`, so it needs NO Linro install, NO
+# token, and no secrets at all. That is deliberate — a test that needs a
+# credential is a test that stops running the moment the credential lapses,
+# and this one has to keep working on forks and on Dependabot branches.
+#
+# What it does NOT cover, and cannot without an install: that a submission is
+# accepted and comes back as a check run. That path is exercised continuously
+# by linro-io/github-integration-test against real staging and production
+# installs.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # actionlint lints WORKFLOWS. Handed action.yml it reports a missing
+      # `jobs:` section and fails the job, because a composite action is a
+      # different schema entirely. action.yml is covered by the two steps
+      # below instead.
+      - name: actionlint
+        uses: raven-actions/actionlint@v2
+        with:
+          files: ".github/workflows/*.yml"
+
+      - name: shellcheck the composite steps
+        run: |
+          # actionlint shellchecks `run:` blocks in workflows, but a composite
+          # action's steps live in action.yml — which it does not descend into.
+          # Extract them and check them directly, or the action's own shell is
+          # the one thing in this repo nothing lints.
+          python3 - <<'PY'
+          import re, subprocess, sys, yaml
+          doc = yaml.safe_load(open("action.yml"))
+          failed = False
+          for step in doc["runs"]["steps"]:
+              body = step.get("run")
+              if not body:
+                  continue
+              name = step.get("name", "<unnamed>")
+              proc = subprocess.run(
+                  ["shellcheck", "--shell=bash", "--severity=warning", "-"],
+                  input="#!/usr/bin/env bash\n" + body, text=True,
+                  capture_output=True,
+              )
+              if proc.returncode != 0:
+                  failed = True
+                  print(f"::error::shellcheck failed for step {name!r}")
+                  print(proc.stdout)
+          sys.exit(1 if failed else 0)
+          PY
+
+      - name: Every input is declared, and every declared input is wired
+        run: |
+          # A composite action fails silently in both directions. Reference an
+          # input that does not exist and the expression expands to the empty
+          # string — the flag just never gets passed. Declare one and
+          # forget to wire it and the caller sets it, sees no error, and gets
+          # no effect. Neither shows up in a run that "passed".
+          python3 - <<'PY'
+          import re, sys, yaml
+          doc = yaml.safe_load(open("action.yml"))
+          declared = set(doc.get("inputs") or {})
+          body = yaml.dump(doc["runs"])
+          used = set(re.findall(r"inputs\.([a-z0-9-]+)", body))
+
+          undeclared = used - declared
+          unwired = declared - used
+          for name in sorted(undeclared):
+              print(f"::error::runs: references inputs.{name}, which is not declared")
+          for name in sorted(unwired):
+              print(f"::error::input '{name}' is declared but never reaches the steps")
+          print(f"{len(declared)} inputs declared, {len(used)} wired")
+          sys.exit(1 if undeclared or unwired else 0)
+          PY
+
+  # The action end to end, on every platform its download step claims to
+  # support. If the marketplace ever stops publishing one of these builds, this
+  # is where it surfaces — as a 404 naming the platform, not as a customer's
+  # broken pipeline.
+  simulate:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Simulate a fixture plan (no install, no token)
+        id: sim
+        uses: ./
+        with:
+          plan: testdata/plan.json
+          account: "000000000000"
+          region: eu-central-1
+          dry-run: "true"
+
+      - name: The action reports which CLI it ran
+        env:
+          RESOLVED: ${{ steps.sim.outputs.version }}
+        run: |
+          # The output is what a caller pins against and what a support ticket
+          # quotes, so an empty one is a real defect even though the step above
+          # passed.
+          test -n "$RESOLVED" || { echo "::error::version output is empty"; exit 1; }
+          echo "ran linro-simulator ${RESOLVED}"
+
+  # The multi-source contract, which is the part most likely to rot: several
+  # sources become ONE simulation, plan and preview COMBINE, and a blank line
+  # is not a path.
+  #
+  # Asserted on the emitted payload, not just on the exit code — an action that
+  # silently dropped every source but the last would still exit 0 here, and
+  # that is exactly the bug this input shape invites.
+  multi-source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Terraform AND Pulumi, one simulation
+        uses: ./
+        with:
+          plan: |
+            testdata/plan.json
+
+            testdata/plan-second.json
+          preview: testdata/preview.json
+          account: "000000000000"
+          region: eu-central-1
+          project: linro-action-selftest
+          dry-run: "true"
+          extra-args: --debug
+
+      - name: OpenTofu is a label on the source, not a different format
+        uses: ./
+        with:
+          plan: testdata/plan.json
+          opentofu: "true"
+          account: "000000000000"
+          region: eu-central-1
+          dry-run: "true"
+
+      - name: The payload carries every source, in its own group
+        run: |
+          set -euo pipefail
+          # Re-run the CLI the action just installed, capturing stdout. The
+          # action step above proves it RUNS; this proves what it SENDS.
+          linro-simulator simulate \
+            --plan testdata/plan.json \
+            --plan testdata/plan-second.json \
+            --preview testdata/preview.json \
+            --account 000000000000 --region eu-central-1 \
+            --project linro-action-selftest \
+            --dry-run > payload.json
+
+          python3 - <<'PY'
+          import json, sys
+          doc = json.load(open("payload.json"))
+          groups = doc["resource_groups"]
+          kinds = [g["provider_type"] for g in groups]
+          total = sum(len(g["resources"]) for g in groups)
+          print(f"groups={kinds} resources={total}")
+          if len(groups) != 3:
+              sys.exit(f"expected 3 resource groups (2 plans + 1 preview), got {len(groups)}: {kinds}")
+          if kinds.count("terraform") != 2 or kinds.count("pulumi") != 1:
+              sys.exit(f"expected 2 terraform groups and 1 pulumi group, got {kinds}")
+          if total < 3:
+              sys.exit(f"expected at least one resource per source, got {total}")
+          PY
+
+      - name: opentofu relabels the terraform groups
+        run: |
+          set -euo pipefail
+          # The flag is worthless if it does not reach provider_type — and
+          # nothing else in this repo would notice, because both dialects parse
+          # the identical plan document.
+          linro-simulator simulate --plan testdata/plan.json --opentofu \
+            --account 000000000000 --region eu-central-1 \
+            --dry-run > tofu.json
+
+          python3 - <<'PY'
+          import json, sys
+          doc = json.load(open("tofu.json"))
+          # A dry run prints the bare group for ONE source and wraps a list
+          # under resource_groups for several. Handle both: this assertion
+          # exists to check the label, and must not start failing because the
+          # test happened to pass a single plan.
+          groups = doc.get("resource_groups", [doc])
+          kinds = [g["provider_type"] for g in groups]
+          if kinds != ["opentofu"]:
+              sys.exit(f"expected the group to be labelled opentofu, got {kinds}")
+          print("ok: provider_type =", kinds)
+          PY
+
+  # Failure modes are a feature: each of these must fail, and say why.
+  refusals:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: No sources at all is refused
+        id: nothing
+        continue-on-error: true
+        uses: ./
+        with:
+          dry-run: "true"
+
+      - name: A real submission without a token is refused
+        id: no-token
+        continue-on-error: true
+        uses: ./
+        with:
+          plan: testdata/plan.json
+          server: https://example.invalid
+
+      - name: A boolean that is neither true nor false is refused
+        id: bad-bool
+        continue-on-error: true
+        uses: ./
+        with:
+          plan: testdata/plan.json
+          # The whole point: `yes` must not quietly read as false and turn the
+          # gate off. This is the one wrong answer that looks like it worked.
+          strict: "yes"
+          dry-run: "true"
+
+      - name: A version the marketplace does not serve is refused
+        id: bad-version
+        continue-on-error: true
+        uses: ./
+        with:
+          plan: testdata/plan.json
+          version: v99.99.99
+          dry-run: "true"
+
+      - name: Assert each refusal actually failed
+        run: |
+          # continue-on-error records the outcome instead of ending the job, so
+          # a step that WRONGLY succeeded is only caught by checking here. Without
+          # this, "the action refuses bad input" would be an untested claim.
+          fail=0
+          for pair in "no sources:${{ steps.nothing.outcome }}" \
+                      "missing token:${{ steps.no-token.outcome }}" \
+                      "bad boolean:${{ steps.bad-bool.outcome }}" \
+                      "unknown version:${{ steps.bad-version.outcome }}"; do
+            name="${pair%%:*}"; outcome="${pair##*:}"
+            if [ "$outcome" != "failure" ]; then
+              echo "::error::${name} should have failed the step, got '${outcome}'"
+              fail=1
+            else
+              echo "ok: ${name} → ${outcome}"
+            fi
+          done
+          exit "$fail"

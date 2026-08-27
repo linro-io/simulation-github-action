@@ -1,0 +1,8 @@
+# The action's own CI uses third-party actions; keep them current. There is no
+# other dependency surface — a composite action ships no lockfile and no image.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly

@@ -1,0 +1,42 @@
+# Move the major-version tag when a release is published.
+#
+# Actions are consumed as `uses: linro-io/simulation-action@v1`, so `v1` has to
+# keep pointing at the newest v1.x.y — that is the contract a caller pins
+# against. Without this, every consumer would have to bump an exact tag to get
+# a fix, and most simply would not.
+#
+# The exact tag (v1.2.3) is created by the release itself and never moves, so
+# anyone wanting full reproducibility pins that instead.
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  retag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Point the major tag at this release
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          case "$TAG" in
+            v[0-9]*) ;;
+            *) echo "::notice::${TAG} is not a vN.N.N tag; leaving major tags alone"; exit 0 ;;
+          esac
+          major="${TAG%%.*}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # -f: the whole point is that this tag moves.
+          git tag -f "$major" "$TAG"
+          git push -f origin "$major"
+          echo "${major} → ${TAG}"
