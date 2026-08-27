@@ -24,7 +24,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # actionlint lints WORKFLOWS. Handed action.yml it reports a missing
       # `jobs:` section and fails the job, because a composite action is a
@@ -97,7 +97,7 @@ jobs:
         runner: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Simulate a fixture plan (no install, no token)
         id: sim
@@ -128,7 +128,7 @@ jobs:
   multi-source:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Terraform AND Pulumi, one simulation
         uses: ./
@@ -209,7 +209,7 @@ jobs:
   refusals:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: No sources at all is refused
         id: nothing
