@@ -32,7 +32,7 @@ jobs:
           terraform plan -out=tfplan
           terraform show -json tfplan > plan.json
 
-      - uses: linro-io/simulation-action@v1
+      - uses: linro-io/simulation-github-action@v1
         with:
           plan: plan.json
           server: ${{ vars.LINRO_SERVER }}      # https://acme.linro.app
@@ -144,7 +144,7 @@ simulation with one verdict, so a change spanning both tools gets a single
 answer instead of one per tool:
 
 ```yaml
-      - uses: linro-io/simulation-action@v1
+      - uses: linro-io/simulation-github-action@v1
         with:
           plan: |
             infra/plan.json
@@ -174,7 +174,7 @@ checking anything more.
         env:
           PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_PASSPHRASE }}
 
-      - uses: linro-io/simulation-action@v1
+      - uses: linro-io/simulation-github-action@v1
         with:
           preview: infra/preview.json
           server: ${{ vars.LINRO_SERVER }}
@@ -186,7 +186,7 @@ checking anything more.
 ## Trying it without an install
 
 ```yaml
-      - uses: linro-io/simulation-action@v1
+      - uses: linro-io/simulation-github-action@v1
         with:
           plan: plan.json
           account: "123456789012"
@@ -235,6 +235,6 @@ Linro install and a valid token. See [NOTICE](NOTICE).
 
 ## Support
 
-Issues and feature requests: <https://github.com/linro-io/simulation-action/issues>.
+Issues and feature requests: <https://github.com/linro-io/simulation-github-action/issues>.
 If you find yourself leaning on `extra-args`, that is worth an issue — a
 first-class input is better than a string.

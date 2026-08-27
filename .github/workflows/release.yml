@@ -1,6 +1,6 @@
 # Verify the major-version tag after a release, and say exactly how to fix it.
 #
-# Actions are consumed as `uses: linro-io/simulation-action@v1`, so `v1` has to
+# Actions are consumed as `uses: linro-io/simulation-github-action@v1`, so `v1` has to
 # keep pointing at the newest v1.x.y — that is the contract a caller pins
 # against. Without it, every consumer would have to bump an exact tag to get a
 # fix, and most simply would not.
