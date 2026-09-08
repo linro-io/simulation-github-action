@@ -14,7 +14,9 @@ Use safe, purpose-built CLI tools for searching and file discovery. Never fall b
 
 ## File Discovery
 
-- Always use `fd` instead of `find` for all file discovery
+- Always use `fd` instead of `find` for all file discovery. Add `--hidden`
+  when hidden paths are in scope and `--no-ignore` when ignored paths must
+  intentionally be checked.
 - Use `fd --extension` to filter by file type (e.g., `fd --extension tf`)
 
 ## Security
