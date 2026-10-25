@@ -40,7 +40,7 @@ jobs:
           label: linro-reviewed-plan
 ```
 
-When it worked, the submission step is accepted and a separate simulation check appears with the configured label. Review its actual findings and coverage, and require that check in branch protection if it is your merge gate. A green submitting step does not mean a passing simulation.
+When it worked, the submission step is accepted and a separate simulation check appears with the configured label. Review its actual findings and coverage, and require both the submitting simulate job and that simulation check in branch protection if they are your merge gate. Strict mode can upload the supported subset before the job fails for local skips; the subset check alone can still be green. A green submitting step does not mean a passing simulation.
 
 Known gaps: this fragment assumes your preceding workflow produces plan.json and has its normal cloud permissions. It does not provide a complete Terraform pipeline. Pull-request OIDC permission is required for a gateway-backed check; a direct GitHub App deployment differs. Ask your installation operator which path is configured. A throwaway local App key cannot create real PR checks.
 
