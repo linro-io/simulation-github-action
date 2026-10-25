@@ -1,0 +1,11 @@
+# Add the GitHub Action
+
+Preconditions reviewed pinned Action ref and compatible published CLI version, existing workflow-produced plan/preview, active SIMULATIONS/API PAT in secret, correct server/scope and configured real GitHub check path. {{page:service/concepts/simulations}} provides result interpretation.
+
+Inputs plan/preview are newline-separated repeatable paths, combine into one payload/verdict. opentofu labels plans; native selects native preview dialect. version is CLI independently of Action ref, current old defaultv0.2.1 must not be assumed capable of new bindings. Current binary floor/installed plugin compatibility must be checked. Linux/macOS AMD64/ARM64 supported; no Windows build. marketplace-url controls artifact source, pin reviewed availability.
+
+Default integration github-ci, strictfalse, labellinro-simulate. PR job contents:read,id-token:write when gateway audience discovery requires minting. CLI asks GetSimulatorMeta for actual audience; empty means direct App path, nonempty minted OIDC. Never copy staging audience to prod or override casually. Throwaway local credentials only support cli-mode smoke, not real PR checks. Explicit integration cli polls but CLI COMPLETED can still return0 with violations: neither mode's step exit proves compliant. Require separate check for github-ci and inspect Result/coverage; build an explicit result-aware policy gate if using cli mode.
+
+--strict only local skips, not all server evaluated checks/resources. --dry-run no submission/verdict. Actual AWS account/region, GCP fallback project/org with contradiction refusal, OTC exact connector domain; no mock scope for gate. Pulumi preview --show-sames --json required for unchanged sibling context. Duplicate paths refused but different files can duplicate real infrastructure. Unique label avoids concurrent check races.
+
+Template intentionally uses REVIEWED refs/version and assumes plan.json already exists; do not advertise as a fully executable end-to-end workflow. Token from secret only, no debug trace of secrets. Review plan artifact retention. Default client poll5m does not cancel server on timeout. Provider/API and check coverage limits remain; passing simulation cannot guarantee passing apply.
