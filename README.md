@@ -6,8 +6,7 @@ Run your Terraform plans and Pulumi previews through Linro's real policy engine
 Any number of sources, in any mix, become **one** simulation with one verdict.
 
 Not a linter. The simulation goes through the same plugin normalization and the
-same checks Linro runs against your live inventory, so a passing simulation
-means a passing apply.
+same checks Linro runs against your live inventory, so the result reflects supported checks over the proposed inventory. It does not guarantee a passing apply or complete provider/check coverage.
 
 ```yaml
 name: Linro
@@ -60,8 +59,7 @@ and the result appears moments later as a separate check run named after your
 That surprises people, so it is worth being explicit: **a red simulation does
 not fail this step.** Require the check run in your branch protection rules —
 that is the gate. If you would rather block the job itself, set
-`integration: cli`, which polls for the result and exits non-zero on failure,
-at the cost of the check-run UI.
+`integration: cli`, which polls and prints the result without the check-run UI. A completed run can still exit zero with violations, so an explicit result-aware gate is required.
 
 ## Inputs
 
@@ -223,7 +221,7 @@ checking anything more.
 ## Pulumi
 
 ```yaml
-      - run: pulumi preview --json > preview.json
+      - run: pulumi preview --show-sames --json > preview.json
         working-directory: infra
         env:
           PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_PASSPHRASE }}
@@ -335,3 +333,5 @@ Linro install and a valid token. See [NOTICE](NOTICE).
 Issues and feature requests: <https://github.com/linro-io/simulation-github-action/issues>.
 If you find yourself leaning on `extra-args`, that is worth an issue — a
 first-class input is better than a string.
+
+Operator guide: [Add the GitHub Action](docs/product/how-to/add-the-github-action.md).
