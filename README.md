@@ -134,8 +134,9 @@ quietly turn off the gate you added it for.
 Every resource is identified within a scope, and each plugin defines its own:
 which values the scope is made of (an AWS account and region, a GCP project, a
 T Cloud Public domain), and where a plan or a preview can state them. A
-plugin's page in the marketplace lists its scope under **Scopes**, for example
-[plugin-gcp](https://marketplace.linro.io/plugins/gcp).
+plugin's details in your Linro installation's Marketplace page list its
+versions and the resources it collects; its scope is documented with the
+plugin.
 
 The scope inputs (`account`, `region`, `project`, `organization`, `domain`) supply what the
 plan or preview does not state itself. A value the scope cannot do without, and
