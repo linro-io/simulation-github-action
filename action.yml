@@ -247,6 +247,9 @@ runs:
       env:
         INPUT_VERSION: ${{ inputs.version }}
         INPUT_MARKETPLACE_URL: ${{ inputs.marketplace-url }}
+        # The ref this action runs at (e.g. v1), named to the marketplace
+        # in X-Linro-Client (ENG-1686); empty when run from a local path.
+        ACTION_REF: ${{ github.action_ref }}
       run: |
         set -euo pipefail
 
@@ -283,6 +286,7 @@ runs:
         # sends people to chase a release that is already published.
         set +e
         http=$(curl -sSL --retry 3 --retry-connrefused --max-time 300 \
+          -H "X-Linro-Client: simulation-github-action/${ACTION_REF:-dev}" \
           -o "${dir}/linro-simulator.tar.gz" -w '%{http_code}' "$url")
         rc=$?
         set -e
