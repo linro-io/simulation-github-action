@@ -369,13 +369,12 @@ jobs:
       # did not go through the proxy.
       - name: A loopback install is reached past a proxy
         uses: ./
+        # One spelling each: workflow env names are case-insensitive. curl
+        # reads http_proxy only in lower case, and ALL_PROXY in either.
         env:
           http_proxy: http://127.0.0.1:9
-          HTTP_PROXY: http://127.0.0.1:9
-          https_proxy: http://127.0.0.1:9
           HTTPS_PROXY: http://127.0.0.1:9
           ALL_PROXY: http://127.0.0.1:9
-          all_proxy: http://127.0.0.1:9
         with:
           plan: testdata/plan.json
           server: ${{ steps.stub.outputs.url }}
