@@ -1,10 +1,14 @@
 # Test the action the way a customer uses it: `uses: ./`, on the runners we
 # claim to support, against the real marketplace.
 #
-# The whole test runs on `dry-run: true`, so it needs NO Linro install, NO
+# The whole test runs on `dry-run: true` against a stand-in install
+# (testdata/stub-install.py on loopback), so it needs NO Linro install, NO real
 # token, and no secrets at all. That is deliberate — a test that needs a
 # credential is a test that stops running the moment the credential lapses,
-# and this one has to keep working on forks and on Dependabot branches.
+# and this one has to keep working on forks and on Dependabot branches. The
+# stand-in serves the install's download route (bearer token, X-Linro-Sha256)
+# and takes the tarball from the public marketplace; once the marketplace
+# requires a key for /artifacts, it needs one too.
 #
 # What it does NOT cover, and cannot without an install: that a submission is
 # accepted and comes back as a check run. That path is exercised continuously
@@ -99,10 +103,16 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Simulate a fixture plan (no install, no token)
+      - name: Start a stand-in install
+        id: stub
+        run: echo "url=$(testdata/start-stub.sh stub ok)" >> "$GITHUB_OUTPUT"
+
+      - name: Simulate a fixture plan (no install, no real token)
         id: sim
         uses: ./
         with:
+          server: ${{ steps.stub.outputs.url }}
+          token: ci-token
           plan: testdata/plan.json
           account: "000000000000"
           region: eu-central-1
@@ -118,6 +128,14 @@ jobs:
           test -n "$RESOLVED" || { echo "::error::version output is empty"; exit 1; }
           echo "ran linro-simulator ${RESOLVED}"
 
+      - name: The CLI came from the install, with the token
+        run: |
+          # The download route and the bearer are the v2 contract with the
+          # install; the stand-in logs what it was asked for.
+          cat "${RUNNER_TEMP}/stub.log"
+          grep -q '^/api/simulator/download/[^/]*/[a-z0-9]*-[a-z0-9]*\.tar\.gz auth=ok$' "${RUNNER_TEMP}/stub.log" ||
+            { echo "::error::the action did not download from the install with its token"; exit 1; }
+
   # The multi-source contract, which is the part most likely to rot: several
   # sources become ONE simulation, plan and preview COMBINE, and a blank line
   # is not a path.
@@ -130,9 +148,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Start a stand-in install
+        id: stub
+        run: echo "url=$(testdata/start-stub.sh stub ok)" >> "$GITHUB_OUTPUT"
+
       - name: Terraform AND Pulumi, one simulation
         uses: ./
         with:
+          server: ${{ steps.stub.outputs.url }}
+          token: ci-token
           plan: |
             testdata/plan.json
 
@@ -147,6 +171,8 @@ jobs:
       - name: OpenTofu is a label on the source, not a different format
         uses: ./
         with:
+          server: ${{ steps.stub.outputs.url }}
+          token: ci-token
           plan: testdata/plan.json
           opentofu: "true"
           account: "000000000000"
@@ -211,11 +237,20 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Start stand-in installs
+        id: stub
+        run: |
+          echo "url=$(testdata/start-stub.sh stub ok)" >> "$GITHUB_OUTPUT"
+          echo "bad-sha=$(testdata/start-stub.sh stub-bad-sha bad-sha)" >> "$GITHUB_OUTPUT"
+          echo "no-sha=$(testdata/start-stub.sh stub-no-sha no-sha)" >> "$GITHUB_OUTPUT"
+
       - name: No sources at all is refused
         id: nothing
         continue-on-error: true
         uses: ./
         with:
+          server: ${{ steps.stub.outputs.url }}
+          token: ci-token
           dry-run: "true"
 
       - name: A real submission without a token is refused
@@ -226,12 +261,73 @@ jobs:
           plan: testdata/plan.json
           server: https://example.invalid
 
+      # v2: the CLI comes from the install, so a dry run needs both too.
+      - name: A dry run without a token is refused
+        id: dry-no-token
+        continue-on-error: true
+        uses: ./
+        with:
+          plan: testdata/plan.json
+          server: ${{ steps.stub.outputs.url }}
+          dry-run: "true"
+
+      - name: A dry run without a server is refused
+        id: dry-no-server
+        continue-on-error: true
+        uses: ./
+        with:
+          plan: testdata/plan.json
+          token: ci-token
+          dry-run: "true"
+
+      - name: A token the install refuses is refused
+        id: wrong-token
+        continue-on-error: true
+        uses: ./
+        with:
+          plan: testdata/plan.json
+          server: ${{ steps.stub.outputs.url }}
+          token: not-the-token
+          dry-run: "true"
+
+      - name: Plain http to an install that is not on loopback is refused
+        id: plain-http
+        continue-on-error: true
+        uses: ./
+        with:
+          plan: testdata/plan.json
+          server: http://example.invalid
+          token: ci-token
+          dry-run: "true"
+
+      - name: A download that does not match X-Linro-Sha256 is refused
+        id: bad-sha
+        continue-on-error: true
+        uses: ./
+        with:
+          plan: testdata/plan.json
+          server: ${{ steps.stub.outputs.bad-sha }}
+          token: ci-token
+          dry-run: "true"
+
+      - name: A download without X-Linro-Sha256 is refused
+        id: no-sha
+        continue-on-error: true
+        uses: ./
+        with:
+          plan: testdata/plan.json
+          server: ${{ steps.stub.outputs.no-sha }}
+          token: ci-token
+          dry-run: "true"
+
       - name: A boolean that is neither true nor false is refused
         id: bad-bool
         continue-on-error: true
         uses: ./
         with:
           plan: testdata/plan.json
+          server: ${{ steps.stub.outputs.url }}
+          token: ci-token
           # The whole point: `yes` must not quietly read as false and turn the
           # gate off. This is the one wrong answer that looks like it worked.
           strict: "yes"
@@ -243,6 +339,8 @@ jobs:
         uses: ./
         with:
           plan: testdata/plan.json
+          server: ${{ steps.stub.outputs.url }}
+          token: ci-token
           version: v99.99.99
           dry-run: "true"
 
@@ -254,6 +352,12 @@ jobs:
           fail=0
           for pair in "no sources:${{ steps.nothing.outcome }}" \
                       "missing token:${{ steps.no-token.outcome }}" \
+                      "dry run without a token:${{ steps.dry-no-token.outcome }}" \
+                      "dry run without a server:${{ steps.dry-no-server.outcome }}" \
+                      "refused token:${{ steps.wrong-token.outcome }}" \
+                      "plain http:${{ steps.plain-http.outcome }}" \
+                      "sha256 mismatch:${{ steps.bad-sha.outcome }}" \
+                      "no sha256 header:${{ steps.no-sha.outcome }}" \
                       "bad boolean:${{ steps.bad-bool.outcome }}" \
                       "unknown version:${{ steps.bad-version.outcome }}"; do
             name="${pair%%:*}"; outcome="${pair##*:}"

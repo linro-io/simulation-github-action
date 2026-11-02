@@ -31,7 +31,7 @@ jobs:
           terraform plan -out=tfplan
           terraform show -json tfplan > plan.json
 
-      - uses: linro-io/simulation-github-action@v1
+      - uses: linro-io/simulation-github-action@v2
         with:
           plan: plan.json
           server: ${{ vars.LINRO_SERVER }}      # https://acme.linro.app
@@ -63,8 +63,9 @@ that is the gate. If you would rather block the job itself, set
 
 ## Inputs
 
-Everything is optional except a source (`plan` and/or `preview`) and — for a
-real submission — `server` and `token`.
+Everything is optional except a source (`plan` and/or `preview`), `server`
+and `token`. Both are required on every run, a dry run included: the action
+downloads the CLI from your install with your token.
 
 Every flag `linro-simulator simulate` accepts is a first-class input. `extra-args`
 is for flags newer than your pinned action, not the normal way to reach anything
@@ -83,9 +84,9 @@ below.
 
 | Input | Default | What it does |
 |---|---|---|
-| `server` | | Your install, e.g. `https://acme.linro.app`. |
-| `token` | | Linro PAT with `SCOPE_SIMULATIONS`. Always from a secret. |
-| `ca-cert` | | PEM bundle for an install behind an internal CA. |
+| `server` | | **Required.** Your install, e.g. `https://acme.linro.app`. The CLI is downloaded from it. `https://` only, or plain `http://` to a loopback install. |
+| `token` | | **Required.** Linro PAT with `SCOPE_SIMULATIONS` (or `SCOPE_API`). Always from a secret. It authorizes the CLI download and the submission. |
+| `ca-cert` | | PEM bundle for an install behind an internal CA. The CLI download trusts only this bundle, since it goes to the install alone. |
 | `insecure` | `false` | Plaintext transport. The CLI allows this only for a **loopback** server — useful on a self-hosted runner beside an install, useless on a hosted one. |
 
 **Scope.** How the resources are identified against your inventory.
@@ -107,7 +108,7 @@ below.
 | `label` | `linro-simulate` | Names the check run. Give each simulation in a workflow its own. |
 | `integration` | `github-ci` | `github-ci` → check run. `cli` → poll and print (use on push/schedule). |
 | `strict` | `false` | Fail if any resource could not be simulated. |
-| `dry-run` | `false` | Print the payload instead of submitting. No server or token needed. |
+| `dry-run` | `false` | Print the payload instead of submitting. Still needs `server` and `token`, to download the CLI. |
 | `poll-timeout` | | How long to wait for a result on `integration: cli`. |
 | `allow-provider-mismatch` | `false` | Proceed past a Pulumi provider major skew. Attributes may be dropped, so a pass means less. |
 | `gateway-oidc-audience` | | Override the OIDC audience. Leave unset — the install is asked for its own, so it cannot drift. |
@@ -121,7 +122,6 @@ below.
 | Input | Default | What it does |
 |---|---|---|
 | `version` | `v0.2.1` | CLI version to run, or `latest`. |
-| `marketplace-url` | `https://marketplace.linro.io` | Where the CLI is downloaded from. |
 
 Outputs: `version` (the CLI version that ran) and `binary-path`.
 
@@ -176,7 +176,7 @@ describes a world that does not exist.
 Read the value off the connector — do not retype what you think you configured:
 
 ```yaml
-      - uses: linro-io/simulation-github-action@v1
+      - uses: linro-io/simulation-github-action@v2
         with:
           plan: infra/plan.json
           server: ${{ vars.LINRO_SERVER }}
@@ -197,7 +197,7 @@ simulation with one verdict, so a change spanning both tools gets a single
 answer instead of one per tool:
 
 ```yaml
-      - uses: linro-io/simulation-github-action@v1
+      - uses: linro-io/simulation-github-action@v2
         with:
           plan: |
             infra/plan.json
@@ -227,7 +227,7 @@ checking anything more.
         env:
           PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_PASSPHRASE }}
 
-      - uses: linro-io/simulation-github-action@v1
+      - uses: linro-io/simulation-github-action@v2
         with:
           preview: infra/preview.json
           server: ${{ vars.LINRO_SERVER }}
@@ -243,7 +243,7 @@ dialects: Terraform (`google`, `google-beta`), Pulumi `gcp` and Pulumi
 `google-native`. The action's default `version` predates this, so set it.
 
 ```yaml
-      - uses: linro-io/simulation-github-action@v1
+      - uses: linro-io/simulation-github-action@v2
         with:
           version: v0.6.27
           plan: plan.json
@@ -279,39 +279,64 @@ dialects: Terraform (`google`, `google-beta`), Pulumi `gcp` and Pulumi
   which a check would read as compliant. The refusal says so; upgrade the
   install. This applies to every provider, not only GCP.
 
-## Trying it without an install
+## Seeing what a simulation would send
 
 ```yaml
-      - uses: linro-io/simulation-github-action@v1
+      - uses: linro-io/simulation-github-action@v2
         with:
           plan: plan.json
+          server: ${{ vars.LINRO_SERVER }}
+          token: ${{ secrets.LINRO_TOKEN }}
           account: "123456789012"
           region: eu-central-1
           dry-run: "true"
 ```
 
-Prints exactly what would be submitted. No server, no token, no account of any
-kind — useful for seeing what a simulation actually sends before wiring
-credentials.
+Prints exactly what would be submitted, and submits nothing. It still needs
+`server` and `token`: the CLI is downloaded from your install.
 
 ## Runners
 
 Linux and macOS, `x64` and `arm64`. There is no Windows build of the CLI, and
 the action says so rather than failing obscurely.
 
-The CLI is downloaded from the Linro marketplace — the same place your install
-gets it — so a version is only available here once it has been published to
-your marketplace. If you pin a `version` the marketplace does not serve, the
-action fails naming the version and the platform. A network failure says so
-separately: the two need opposite fixes.
+The CLI is downloaded from your install, at
+`<server>/api/simulator/download/<version>/<os>-<arch>.tar.gz`, with your token
+as `Authorization: Bearer`. The install fetches it from the Linro marketplace
+with its own key, so a version is only available once the marketplace serves
+it, and checks it against the sha256 the marketplace states. The action checks
+the file again against the install's `X-Linro-Sha256` header before running
+it. If you pin a `version` the marketplace does not serve, the action fails
+naming the version and the platform. A refused token (401), a token without
+`SCOPE_SIMULATIONS` (403) and a network failure each say so separately: they
+need different fixes.
 
 ## Versioning
 
-Pin the action to a major (`@v1`) for automatic fixes, or to an exact release
+Pin the action to a major (`@v2`) for automatic fixes, or to an exact release
 for full reproducibility. The `version` input pins the **CLI**, independently.
 Both are pinned by default; `version: latest` tracks your marketplace, which is
 convenient and means a green run stops being evidence about any particular
 build.
+
+## Upgrading from v1
+
+v2 downloads the CLI from your install instead of anonymously from the
+marketplace, because the marketplace is going to require a key for downloads.
+Two things change, which is why it is a new major:
+
+- `server` and `token` are required on every run, **dry runs included**. A v1
+  dry run that set neither must now set both.
+- The `marketplace-url` input is gone. Remove it from your workflow: an input
+  the action does not declare is ignored with a warning.
+
+Your install must serve the simulator download (an older one answers 404). The
+token you already use for submissions works, as long as it carries
+`SCOPE_SIMULATIONS` or `SCOPE_API`.
+
+`@v1` keeps downloading anonymously from the marketplace until the marketplace
+requires a key for downloads; it gets no further changes. See
+[CHANGELOG.md](CHANGELOG.md).
 
 ## What this action is not
 

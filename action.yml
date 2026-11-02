@@ -9,10 +9,13 @@
 #     The previous incarnation of this action was a Docker image with the
 #     binary baked in, and it silently went two majors stale.
 #
-# The CLI is downloaded from the Linro marketplace, which is also where a
-# customer's own installs get it. That is deliberate: the marketplace only
-# serves a version once it has been ingested and promoted, so this action can
-# never run a build that no install could actually offer.
+# The CLI is downloaded from your Linro install (`server`), with your PAT
+# (`token`). The install fetches it from the Linro marketplace with its own
+# key and checks it against the sha256 the marketplace states, so the
+# marketplace only serves a version once it has been ingested and promoted,
+# and this action can never run a build that no install could actually offer.
+# That is also why `server` and `token` are required on every run, a dry run
+# included: without them there is nowhere to download the CLI from.
 #
 # Every flag `linro-simulator simulate` accepts is a first-class input here.
 # `extra-args` exists for flags added to the CLI after an action release, not
@@ -59,20 +62,20 @@ inputs:
   # ---- where to send it ----------------------------------------------------
   server:
     description: >-
-      Your Linro install, e.g. https://acme.linro.app. Required unless
-      `dry-run` is true.
-    required: false
-    default: ""
+      Your Linro install, e.g. https://acme.linro.app. Required, a dry run
+      included: the CLI is downloaded from it.
+    required: true
   token:
     description: >-
       A Linro Personal Access Token with the SCOPE_SIMULATIONS scope. Pass it
-      from a secret — never inline. Required unless `dry-run` is true.
-    required: false
-    default: ""
+      from a secret — never inline. Required, a dry run included: it
+      authorizes the CLI download as well as the submission.
+    required: true
   ca-cert:
     description: >-
       Path to a PEM bundle to trust in addition to the system roots, for an
-      install behind an internal CA.
+      install behind an internal CA. The CLI download trusts this bundle only,
+      since it goes to the install alone.
     required: false
     default: ""
   insecure:
@@ -165,8 +168,9 @@ inputs:
     default: "false"
   dry-run:
     description: >-
-      Assemble the payload and print it instead of submitting. Needs no server
-      and no token — useful for seeing exactly what a simulation would send.
+      Assemble the payload and print it instead of submitting — useful for
+      seeing exactly what a simulation would send. It still needs `server` and
+      `token`, to download the CLI.
     required: false
     default: "false"
   poll-timeout:
@@ -215,7 +219,7 @@ inputs:
   version:
     description: >-
       linro-simulator version to run, e.g. v0.2.1, or `latest` to track the
-      newest version your marketplace serves. Pinning is recommended: `latest`
+      newest version the marketplace serves your install. Pinning is recommended: `latest`
       makes a green run stop being evidence about any particular version.
 
       The default is only ever raised to a version PRODUCTION serves. A default
@@ -223,12 +227,6 @@ inputs:
       first run, which is the worst possible first impression.
     required: false
     default: "v0.2.1"
-  marketplace-url:
-    description: >-
-      Marketplace to download the CLI from. Override only if your Linro
-      deployment serves its own.
-    required: false
-    default: "https://marketplace.linro.io"
 
 outputs:
   version:
@@ -244,11 +242,16 @@ runs:
     - name: Install linro-simulator
       id: install
       shell: bash
+      # The ca-cert path resolves from here, as it does for the CLI.
+      working-directory: ${{ inputs.working-directory }}
       env:
         INPUT_VERSION: ${{ inputs.version }}
-        INPUT_MARKETPLACE_URL: ${{ inputs.marketplace-url }}
-        # The ref this action runs at (e.g. v1), named to the marketplace
-        # in X-Linro-Client (ENG-1686); empty when run from a local path.
+        INPUT_SERVER: ${{ inputs.server }}
+        INPUT_CA_CERT: ${{ inputs.ca-cert }}
+        # Through env:, never argv: curl reads it from a config on stdin.
+        LINRO_SIMULATION_TOKEN: ${{ inputs.token }}
+        # The ref this action runs at (e.g. v2), sent in X-Linro-Client
+        # (ENG-1686); empty when run from a local path.
         ACTION_REF: ${{ github.action_ref }}
       run: |
         set -euo pipefail
@@ -272,49 +275,110 @@ runs:
             ;;
         esac
 
-        # The catalog stores a bare semver; the release tag people quote carries
-        # a leading v. Accept either. `latest` is an alias resolved server-side,
-        # and has no v to strip.
-        version="${INPUT_VERSION#v}"
-        url="${INPUT_MARKETPLACE_URL}/artifacts/simulators/linro-simulator/${version}/${os}-${arch}.tar.gz"
-
-        dir="${RUNNER_TEMP}/linro-simulator"
-        mkdir -p "$dir"
-
-        # Separate "cannot reach the marketplace" from "that version is not in
-        # it". They need opposite fixes, and reporting the first as the second
-        # sends people to chase a release that is already published.
-        set +e
-        http=$(curl -sSL --retry 3 --retry-connrefused --max-time 300 \
-          -H "X-Linro-Client: simulation-github-action/${ACTION_REF:-dev}" \
-          -o "${dir}/linro-simulator.tar.gz" -w '%{http_code}' "$url")
-        rc=$?
-        set -e
-
-        if [ "$rc" -ne 0 ]; then
-          echo "::error::could not reach ${INPUT_MARKETPLACE_URL} (curl exit ${rc}). This is a network failure, not a missing version."
+        # Required on every run, a dry run included: the install serves the
+        # CLI, and the token authorizes the download.
+        if [ -z "$INPUT_SERVER" ]; then
+          echo '::error::the server input is required: the CLI is downloaded from your Linro install (a dry run needs it too).'
           exit 1
         fi
-        case "$http" in
-          200) ;;
-          410)
-            # A retraction is not a typo. Saying "check the version exists"
-            # here sends someone to confirm a version that does exist and was
-            # deliberately withdrawn — usually for a defect worth knowing about.
-            echo "::error::linro-simulator ${INPUT_VERSION} has been RETRACTED and is no longer served. Pin a different version."
+        if [ -z "${LINRO_SIMULATION_TOKEN}" ]; then
+          echo '::error::the token input is required: pass a Linro PAT with SCOPE_SIMULATIONS from a secret (a dry run needs it too, to download the CLI).'
+          exit 1
+        fi
+        server="${INPUT_SERVER%/}"
+        # The token must not cross the network in clear: plain http only to a
+        # loopback install, the same rule the CLI applies to `insecure`.
+        case "$server" in
+          https://*) ;;
+          http://127.0.0.1|http://127.0.0.1:*|http://localhost|http://localhost:*|http://\[::1\]|http://\[::1\]:*) ;;
+          *)
+            echo "::error::server must be an https:// URL (plain http only for a loopback install), got '${INPUT_SERVER}'."
             exit 1
             ;;
-          *)
-            echo "::error::${INPUT_MARKETPLACE_URL} answered HTTP ${http} for linro-simulator ${INPUT_VERSION} (${os}-${arch})."
-            echo "Check the version exists in your marketplace catalog, and that the platform is one it publishes."
+        esac
+        # The token is a header value; a newline or quote would break the
+        # curl config it is passed through.
+        case "$LINRO_SIMULATION_TOKEN" in
+          *[[:space:]\"\\]*)
+            echo '::error::the token contains whitespace or a quote; check the secret it comes from.'
             exit 1
             ;;
         esac
 
+        # The catalog stores a bare semver; the release tag people quote carries
+        # a leading v. Accept either. `latest` is an alias the marketplace
+        # resolves, and has no v to strip.
+        version="${INPUT_VERSION#v}"
+        url="${server}/api/simulator/download/${version}/${os}-${arch}.tar.gz"
+
+        dir="${RUNNER_TEMP}/linro-simulator"
+        mkdir -p "$dir"
+        tarball="${dir}/linro-simulator.tar.gz"
+        headers="${dir}/headers.txt"
+
+        # ${tls[@]+...}: an empty array is "unbound" to bash 3.2 (macOS) under set -u.
+        tls=()
+        if [ -n "$INPUT_CA_CERT" ]; then tls=(--cacert "$INPUT_CA_CERT"); fi
+
+        # Separate "cannot reach the install" from "it refused". They need
+        # opposite fixes. The token goes in a curl config read from stdin, so
+        # it never appears in argv (`ps` on the runner).
+        set +e
+        http=$(printf 'header = "Authorization: Bearer %s"\n' "$LINRO_SIMULATION_TOKEN" |
+          curl -sS --retry 3 --retry-connrefused --max-time 600 -K - ${tls[@]+"${tls[@]}"} \
+            -H "X-Linro-Client: simulation-github-action/${ACTION_REF:-dev}" \
+            -D "$headers" -o "$tarball" -w '%{http_code}' "$url")
+        rc=$?
+        set -e
+
+        if [ "$rc" -ne 0 ]; then
+          echo "::error::could not reach ${server} (curl exit ${rc}). This is a network or TLS failure, not a missing version."
+          exit 1
+        fi
+        case "$http" in
+          200) ;;
+          401)
+            echo "::error::${server} refused the token (HTTP 401): it is missing, expired or revoked. Mint a PAT with SCOPE_SIMULATIONS in Linro."
+            exit 1
+            ;;
+          403)
+            echo "::error::${server} refused the token (HTTP 403): it does not carry SCOPE_SIMULATIONS. Mint a PAT with that scope."
+            exit 1
+            ;;
+          404)
+            echo "::error::${server} has no linro-simulator ${INPUT_VERSION} for ${os}-${arch} (HTTP 404)."
+            echo "Check the version exists in the marketplace catalog and has not been retracted. An install too old to serve the simulator answers 404 too."
+            exit 1
+            ;;
+          *)
+            echo "::error::${server} answered HTTP ${http} for linro-simulator ${INPUT_VERSION} (${os}-${arch})."
+            echo "A 502 or 503 means the install could not reach the marketplace or check the token; retry, or ask your Linro administrator."
+            exit 1
+            ;;
+        esac
+
+        # A second check of the install's own: it already refuses a tarball
+        # that does not match the marketplace's sha256 by cutting the transfer
+        # short. This catches anything that changed the bytes after it.
+        want=$(tr -d '\r' < "$headers" | awk 'tolower($1) == "x-linro-sha256:" { v = tolower($2) } END { print v }')
+        if [ -z "$want" ]; then
+          echo "::error::${server} sent no X-Linro-Sha256 header, so the download cannot be verified."
+          exit 1
+        fi
+        if command -v sha256sum >/dev/null 2>&1; then
+          have=$(sha256sum "$tarball" | cut -d' ' -f1)
+        else
+          have=$(shasum -a 256 "$tarball" | cut -d' ' -f1)
+        fi
+        if [ "$have" != "$want" ]; then
+          echo "::error::the downloaded CLI does not match the sha256 the install stated (${have} != ${want}). Not running it."
+          exit 1
+        fi
+
         # The release tarball wraps everything in one directory named after the
         # build (linro-simulator-vX.Y.Z-os-arch/), carrying the binary, its
         # LICENCE and its third-party notices.
-        tar -xzf "${dir}/linro-simulator.tar.gz" -C "$dir" --strip-components=1
+        tar -xzf "$tarball" -C "$dir" --strip-components=1
         chmod +x "${dir}/linro-simulator"
         echo "$dir" >> "$GITHUB_PATH"
 
@@ -410,15 +474,14 @@ runs:
         if want dry-run "$INPUT_DRY_RUN"; then
           args+=(--dry-run)
         else
-          # Only enforced for a real submission: a dry run needs neither, and
-          # demanding them would make the cheapest way to try this action the
-          # one that asks for a token first.
+          # The install step already refused a run without either; kept so
+          # this step stands on its own.
           if [ -z "$INPUT_SERVER" ]; then
-            echo '::error::the server input is required (or set dry-run: true).'
+            echo '::error::the server input is required.'
             exit 1
           fi
           if [ -z "${LINRO_SIMULATION_TOKEN}" ]; then
-            echo '::error::the token input is required (or set dry-run: true). Pass a Linro PAT with SCOPE_SIMULATIONS from a secret.'
+            echo '::error::the token input is required. Pass a Linro PAT with SCOPE_SIMULATIONS from a secret.'
             exit 1
           fi
           args+=(--server "$INPUT_SERVER" --integration "$INPUT_INTEGRATION")
