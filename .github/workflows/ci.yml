@@ -240,10 +240,15 @@ jobs:
       - name: Start stand-in installs
         id: stub
         run: |
-          echo "url=$(testdata/start-stub.sh stub ok)" >> "$GITHUB_OUTPUT"
-          echo "bad-sha=$(testdata/start-stub.sh stub-bad-sha bad-sha)" >> "$GITHUB_OUTPUT"
-          echo "no-sha=$(testdata/start-stub.sh stub-no-sha no-sha)" >> "$GITHUB_OUTPUT"
+          {
+            echo "url=$(testdata/start-stub.sh stub ok)"
+            echo "bad-sha=$(testdata/start-stub.sh stub-bad-sha bad-sha)"
+            echo "no-sha=$(testdata/start-stub.sh stub-no-sha no-sha)"
+          } >> "$GITHUB_OUTPUT"
 
+      # Each case must fail AND for its own reason (testdata/expect-refusal.sh
+      # reads the reason the action recorded), so a stub failure cannot pass
+      # for the check a case is about. `if: always()` runs every check.
       - name: No sources at all is refused
         id: nothing
         continue-on-error: true
@@ -252,6 +257,9 @@ jobs:
           server: ${{ steps.stub.outputs.url }}
           token: ci-token
           dry-run: "true"
+      - name: "Check: no sources"
+        if: always()
+        run: testdata/expect-refusal.sh "no sources" "${{ steps.nothing.outcome }}" "nothing to simulate"
 
       - name: A real submission without a token is refused
         id: no-token
@@ -260,8 +268,11 @@ jobs:
         with:
           plan: testdata/plan.json
           server: https://example.invalid
+          token: ""
+      - name: "Check: missing token"
+        if: always()
+        run: testdata/expect-refusal.sh "missing token" "${{ steps.no-token.outcome }}" "the token input is required"
 
-      # v2: the CLI comes from the install, so a dry run needs both too.
       - name: A dry run without a token is refused
         id: dry-no-token
         continue-on-error: true
@@ -269,7 +280,11 @@ jobs:
         with:
           plan: testdata/plan.json
           server: ${{ steps.stub.outputs.url }}
+          token: ""
           dry-run: "true"
+      - name: "Check: dry run without a token"
+        if: always()
+        run: testdata/expect-refusal.sh "dry run without a token" "${{ steps.dry-no-token.outcome }}" "the token input is required"
 
       - name: A dry run without a server is refused
         id: dry-no-server
@@ -277,8 +292,12 @@ jobs:
         uses: ./
         with:
           plan: testdata/plan.json
+          server: ""
           token: ci-token
           dry-run: "true"
+      - name: "Check: dry run without a server"
+        if: always()
+        run: testdata/expect-refusal.sh "dry run without a server" "${{ steps.dry-no-server.outcome }}" "the server input is required"
 
       - name: A token the install refuses is refused
         id: wrong-token
@@ -289,6 +308,9 @@ jobs:
           server: ${{ steps.stub.outputs.url }}
           token: not-the-token
           dry-run: "true"
+      - name: "Check: refused token"
+        if: always()
+        run: testdata/expect-refusal.sh "refused token" "${{ steps.wrong-token.outcome }}" "refused the token (HTTP 401)"
 
       - name: Plain http to an install that is not on loopback is refused
         id: plain-http
@@ -299,6 +321,9 @@ jobs:
           server: http://example.invalid
           token: ci-token
           dry-run: "true"
+      - name: "Check: plain http"
+        if: always()
+        run: testdata/expect-refusal.sh "plain http" "${{ steps.plain-http.outcome }}" "server must be an https:// URL"
 
       - name: A download that does not match X-Linro-Sha256 is refused
         id: bad-sha
@@ -309,6 +334,9 @@ jobs:
           server: ${{ steps.stub.outputs.bad-sha }}
           token: ci-token
           dry-run: "true"
+      - name: "Check: sha256 mismatch"
+        if: always()
+        run: testdata/expect-refusal.sh "sha256 mismatch" "${{ steps.bad-sha.outcome }}" "does not match the sha256 the install stated"
 
       - name: A download without X-Linro-Sha256 is refused
         id: no-sha
@@ -319,6 +347,9 @@ jobs:
           server: ${{ steps.stub.outputs.no-sha }}
           token: ci-token
           dry-run: "true"
+      - name: "Check: no sha256 header"
+        if: always()
+        run: testdata/expect-refusal.sh "no sha256 header" "${{ steps.no-sha.outcome }}" "sent no X-Linro-Sha256 header"
 
       - name: A boolean that is neither true nor false is refused
         id: bad-bool
@@ -328,10 +359,11 @@ jobs:
           plan: testdata/plan.json
           server: ${{ steps.stub.outputs.url }}
           token: ci-token
-          # The whole point: `yes` must not quietly read as false and turn the
-          # gate off. This is the one wrong answer that looks like it worked.
           strict: "yes"
           dry-run: "true"
+      - name: "Check: bad boolean"
+        if: always()
+        run: testdata/expect-refusal.sh "bad boolean" "${{ steps.bad-bool.outcome }}" "the strict input must be true or false"
 
       - name: A version the marketplace does not serve is refused
         id: bad-version
@@ -343,29 +375,20 @@ jobs:
           token: ci-token
           version: v99.99.99
           dry-run: "true"
+      - name: "Check: unknown version"
+        if: always()
+        run: testdata/expect-refusal.sh "unknown version" "${{ steps.bad-version.outcome }}" "has no linro-simulator v99.99.99"
 
-      - name: Assert each refusal actually failed
-        run: |
-          # continue-on-error records the outcome instead of ending the job, so
-          # a step that WRONGLY succeeded is only caught by checking here. Without
-          # this, "the action refuses bad input" would be an untested claim.
-          fail=0
-          for pair in "no sources:${{ steps.nothing.outcome }}" \
-                      "missing token:${{ steps.no-token.outcome }}" \
-                      "dry run without a token:${{ steps.dry-no-token.outcome }}" \
-                      "dry run without a server:${{ steps.dry-no-server.outcome }}" \
-                      "refused token:${{ steps.wrong-token.outcome }}" \
-                      "plain http:${{ steps.plain-http.outcome }}" \
-                      "sha256 mismatch:${{ steps.bad-sha.outcome }}" \
-                      "no sha256 header:${{ steps.no-sha.outcome }}" \
-                      "bad boolean:${{ steps.bad-bool.outcome }}" \
-                      "unknown version:${{ steps.bad-version.outcome }}"; do
-            name="${pair%%:*}"; outcome="${pair##*:}"
-            if [ "$outcome" != "failure" ]; then
-              echo "::error::${name} should have failed the step, got '${outcome}'"
-              fail=1
-            else
-              echo "ok: ${name} → ${outcome}"
-            fi
-          done
-          exit "$fail"
+      - name: A version that is not a version is refused before any request
+        id: malformed-version
+        continue-on-error: true
+        uses: ./
+        with:
+          plan: testdata/plan.json
+          server: ${{ steps.stub.outputs.url }}
+          token: ci-token
+          version: "1.0/../../x"
+          dry-run: "true"
+      - name: "Check: malformed version"
+        if: always()
+        run: testdata/expect-refusal.sh "malformed version" "${{ steps.malformed-version.outcome }}" "is not a version"

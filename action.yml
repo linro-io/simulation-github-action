@@ -256,13 +256,22 @@ runs:
       run: |
         set -euo pipefail
 
+        # Every refusal goes through error(): an ::error:: annotation, and a
+        # line in $RUNNER_TEMP/linro-simulation-error, which this repository's
+        # CI reads to check that each refusal fails for its own reason.
+        error() {
+          echo "::error::$*"
+          printf '%s\n' "$*" >> "${RUNNER_TEMP}/linro-simulation-error"
+        }
+        rm -f "${RUNNER_TEMP}/linro-simulation-error"
+
         # RUNNER_OS/RUNNER_ARCH are the only portable identity the runner
         # gives us; map them onto the marketplace's platform names.
         case "$RUNNER_OS" in
           Linux)  os=linux ;;
           macOS)  os=darwin ;;
           *)
-            echo "::error::linro-simulator has no ${RUNNER_OS} build. This action runs on Linux and macOS runners."
+            error "linro-simulator has no ${RUNNER_OS} build. This action runs on Linux and macOS runners."
             exit 1
             ;;
         esac
@@ -270,7 +279,7 @@ runs:
           X64)   arch=amd64 ;;
           ARM64) arch=arm64 ;;
           *)
-            echo "::error::unsupported runner architecture ${RUNNER_ARCH} (expected X64 or ARM64)."
+            error "unsupported runner architecture ${RUNNER_ARCH} (expected X64 or ARM64)."
             exit 1
             ;;
         esac
@@ -278,11 +287,11 @@ runs:
         # Required on every run, a dry run included: the install serves the
         # CLI, and the token authorizes the download.
         if [ -z "$INPUT_SERVER" ]; then
-          echo '::error::the server input is required: the CLI is downloaded from your Linro install (a dry run needs it too).'
+          error 'the server input is required: the CLI is downloaded from your Linro install (a dry run needs it too).'
           exit 1
         fi
         if [ -z "${LINRO_SIMULATION_TOKEN}" ]; then
-          echo '::error::the token input is required: pass a Linro PAT with SCOPE_SIMULATIONS from a secret (a dry run needs it too, to download the CLI).'
+          error 'the token input is required: pass a Linro PAT with SCOPE_SIMULATIONS from a secret (a dry run needs it too, to download the CLI).'
           exit 1
         fi
         server="${INPUT_SERVER%/}"
@@ -292,7 +301,7 @@ runs:
           https://*) ;;
           http://127.0.0.1|http://127.0.0.1:*|http://localhost|http://localhost:*|http://\[::1\]|http://\[::1\]:*) ;;
           *)
-            echo "::error::server must be an https:// URL (plain http only for a loopback install), got '${INPUT_SERVER}'."
+            error "server must be an https:// URL (plain http only for a loopback install), got '${INPUT_SERVER}'."
             exit 1
             ;;
         esac
@@ -300,7 +309,7 @@ runs:
         # curl config it is passed through.
         case "$LINRO_SIMULATION_TOKEN" in
           *[[:space:]\"\\]*)
-            echo '::error::the token contains whitespace or a quote; check the secret it comes from.'
+            error 'the token contains whitespace or a quote; check the secret it comes from.'
             exit 1
             ;;
         esac
@@ -309,6 +318,13 @@ runs:
         # a leading v. Accept either. `latest` is an alias the marketplace
         # resolves, and has no v to strip.
         version="${INPUT_VERSION#v}"
+        # The install accepts exactly this shape (a semver or an alias such as
+        # latest); anything else would only come back as a confusing 404.
+        version_re='^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$'
+        if ! [[ "$version" =~ $version_re ]]; then
+          error "the version input '${INPUT_VERSION}' is not a version: expected e.g. v0.2.1, 0.2.1 or latest."
+          exit 1
+        fi
         url="${server}/api/simulator/download/${version}/${os}-${arch}.tar.gz"
 
         dir="${RUNNER_TEMP}/linro-simulator"
@@ -325,33 +341,33 @@ runs:
         # it never appears in argv (`ps` on the runner).
         set +e
         http=$(printf 'header = "Authorization: Bearer %s"\n' "$LINRO_SIMULATION_TOKEN" |
-          curl -sS --retry 3 --retry-connrefused --max-time 600 -K - ${tls[@]+"${tls[@]}"} \
+          curl -sS --retry 3 --retry-connrefused --max-time 600 --retry-max-time 600 -K - ${tls[@]+"${tls[@]}"} \
             -H "X-Linro-Client: simulation-github-action/${ACTION_REF:-dev}" \
             -D "$headers" -o "$tarball" -w '%{http_code}' "$url")
         rc=$?
         set -e
 
         if [ "$rc" -ne 0 ]; then
-          echo "::error::could not reach ${server} (curl exit ${rc}). This is a network or TLS failure, not a missing version."
+          error "could not reach ${server} (curl exit ${rc}). This is a network or TLS failure, not a missing version."
           exit 1
         fi
         case "$http" in
           200) ;;
           401)
-            echo "::error::${server} refused the token (HTTP 401): it is missing, expired or revoked. Mint a PAT with SCOPE_SIMULATIONS in Linro."
+            error "${server} refused the token (HTTP 401): it is missing, expired or revoked. Mint a PAT with SCOPE_SIMULATIONS in Linro."
             exit 1
             ;;
           403)
-            echo "::error::${server} refused the token (HTTP 403): it does not carry SCOPE_SIMULATIONS. Mint a PAT with that scope."
+            error "${server} refused the token (HTTP 403): it does not carry SCOPE_SIMULATIONS. Mint a PAT with that scope."
             exit 1
             ;;
           404)
-            echo "::error::${server} has no linro-simulator ${INPUT_VERSION} for ${os}-${arch} (HTTP 404)."
+            error "${server} has no linro-simulator ${INPUT_VERSION} for ${os}-${arch} (HTTP 404)."
             echo "Check the version exists in the marketplace catalog and has not been retracted. An install too old to serve the simulator answers 404 too."
             exit 1
             ;;
           *)
-            echo "::error::${server} answered HTTP ${http} for linro-simulator ${INPUT_VERSION} (${os}-${arch})."
+            error "${server} answered HTTP ${http} for linro-simulator ${INPUT_VERSION} (${os}-${arch})."
             echo "A 502 or 503 means the install could not reach the marketplace or check the token; retry, or ask your Linro administrator."
             exit 1
             ;;
@@ -362,7 +378,7 @@ runs:
         # short. This catches anything that changed the bytes after it.
         want=$(tr -d '\r' < "$headers" | awk 'tolower($1) == "x-linro-sha256:" { v = tolower($2) } END { print v }')
         if [ -z "$want" ]; then
-          echo "::error::${server} sent no X-Linro-Sha256 header, so the download cannot be verified."
+          error "${server} sent no X-Linro-Sha256 header, so the download cannot be verified."
           exit 1
         fi
         if command -v sha256sum >/dev/null 2>&1; then
@@ -371,7 +387,7 @@ runs:
           have=$(shasum -a 256 "$tarball" | cut -d' ' -f1)
         fi
         if [ "$have" != "$want" ]; then
-          echo "::error::the downloaded CLI does not match the sha256 the install stated (${have} != ${want}). Not running it."
+          error "the downloaded CLI does not match the sha256 the install stated (${have} != ${want}). Not running it."
           exit 1
         fi
 
@@ -421,6 +437,14 @@ runs:
       run: |
         set -euo pipefail
 
+        # Every refusal goes through error(): an ::error:: annotation, and a
+        # line in $RUNNER_TEMP/linro-simulation-error, which this repository's
+        # CI reads to check that each refusal fails for its own reason.
+        error() {
+          echo "::error::$*"
+          printf '%s\n' "$*" >> "${RUNNER_TEMP}/linro-simulation-error"
+        }
+
         args=()
 
         # Actions inputs are ALWAYS strings, so a boolean is whatever the caller
@@ -434,7 +458,7 @@ runs:
             false|False|FALSE) return 1 ;;
             "")                return 1 ;;
             *)
-              echo "::error::the ${1} input must be true or false, got '${2}'"
+              error "the ${1} input must be true or false, got '${2}'"
               exit 1
               ;;
           esac
@@ -462,7 +486,7 @@ runs:
         # Single-quoted: inside a double-quoted string a backtick starts
         # command substitution, so "set `plan`" would try to RUN plan.
         if [ ${#args[@]} -eq 0 ]; then
-          echo '::error::nothing to simulate — set the plan input, the preview input, or both.'
+          error 'nothing to simulate — set the plan input, the preview input, or both.'
           exit 1
         fi
 
@@ -477,11 +501,11 @@ runs:
           # The install step already refused a run without either; kept so
           # this step stands on its own.
           if [ -z "$INPUT_SERVER" ]; then
-            echo '::error::the server input is required.'
+            error 'the server input is required.'
             exit 1
           fi
           if [ -z "${LINRO_SIMULATION_TOKEN}" ]; then
-            echo '::error::the token input is required. Pass a Linro PAT with SCOPE_SIMULATIONS from a secret.'
+            error 'the token input is required. Pass a Linro PAT with SCOPE_SIMULATIONS from a secret.'
             exit 1
           fi
           args+=(--server "$INPUT_SERVER" --integration "$INPUT_INTEGRATION")

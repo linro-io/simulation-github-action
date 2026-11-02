@@ -18,6 +18,11 @@ downloads, and a customer's CI has no marketplace key; it has a Linro PAT.
   token never crosses the network in clear.
 - A refused token (401), a token without `SCOPE_SIMULATIONS` (403), an
   unknown version (404) and an unreachable install are reported separately.
+- `version` is checked before any request (a semver or an alias such as
+  `latest`), and the whole download, retries included, is bounded at 10
+  minutes.
+- `ca-cert` also applies to the CLI download, where it replaces the system
+  roots.
 
 Needs an install that serves the simulator download. `@v1` keeps downloading
 anonymously from the marketplace until the marketplace requires a key for

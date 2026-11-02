@@ -86,7 +86,7 @@ below.
 |---|---|---|
 | `server` | | **Required.** Your install, e.g. `https://acme.linro.app`. The CLI is downloaded from it. `https://` only, or plain `http://` to a loopback install. |
 | `token` | | **Required.** Linro PAT with `SCOPE_SIMULATIONS` (or `SCOPE_API`). Always from a secret. It authorizes the CLI download and the submission. |
-| `ca-cert` | | PEM bundle for an install behind an internal CA. The CLI download trusts only this bundle, since it goes to the install alone. |
+| `ca-cert` | | PEM bundle for an install behind an internal CA. The CLI keeps the system roots and adds this bundle. The CLI download (curl `--cacert`) uses this bundle **instead of** the system roots, since it goes to the install alone, so the bundle must hold the CA that signed your install's certificate. |
 | `insecure` | `false` | Plaintext transport. The CLI allows this only for a **loopback** server — useful on a self-hosted runner beside an install, useless on a hosted one. |
 
 **Scope.** How the resources are identified against your inventory.
