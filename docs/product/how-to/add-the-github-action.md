@@ -14,7 +14,7 @@ Run a reviewed Terraform plan or Pulumi preview through Linro from a pull reques
 
 ## Prepare the workflow
 
-Have the repository owner choose a reviewed Action revision and compatible published simulator version. Configure the Linro server variable and a simulation-scoped token in repository secrets. Do not paste a token into the workflow.
+Have the repository owner choose a reviewed Action revision and compatible published simulator version. Configure the Linro server variable and a simulation-scoped token in repository secrets. Do not paste a token into the workflow. From Action v2 the CLI is downloaded from your Linro server with that token, so both are required on every run, dry runs included.
 
 ```yaml
 name: Linro simulation
