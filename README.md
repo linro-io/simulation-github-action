@@ -311,6 +311,14 @@ naming the version and the platform. A refused token (401), a token without
 `SCOPE_SIMULATIONS` (403) and a network failure each say so separately: they
 need different fixes.
 
+The download to an `https://` install follows the runner's proxy settings
+(`https_proxy`, `ALL_PROXY`, `no_proxy`), as it did before. A loopback
+`http://` install is never reached through a proxy, so the token cannot leave
+the runner in clear. `server` must be a bare base URL: user info (`user@`), a
+query or a fragment is refused, and plain `http://` is accepted only for
+exactly `127.0.0.1`, `localhost` or `[::1]`, with an optional port. The whole
+download, retries included, has one 10-minute deadline.
+
 ## Versioning
 
 Pin the action to a major (`@v2`) for automatic fixes, or to an exact release

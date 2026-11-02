@@ -295,16 +295,38 @@ runs:
           exit 1
         fi
         server="${INPUT_SERVER%/}"
-        # The token must not cross the network in clear: plain http only to a
-        # loopback install, the same rule the CLI applies to `insecure`.
+        # The token must not cross the network in clear, nor reach a host
+        # other than the install. The whole authority is checked, not a
+        # prefix: http://127.0.0.1:80@evil.example is a request to evil.example.
         case "$server" in
-          https://*) ;;
-          http://127.0.0.1|http://127.0.0.1:*|http://localhost|http://localhost:*|http://\[::1\]|http://\[::1\]:*) ;;
+          https://*) scheme=https; rest="${server#https://}" ;;
+          http://*)  scheme=http;  rest="${server#http://}" ;;
           *)
             error "server must be an https:// URL (plain http only for a loopback install), got '${INPUT_SERVER}'."
             exit 1
             ;;
         esac
+        authority="${rest%%/*}"
+        if [[ "$server" == *[[:space:]\\?#]* ]]; then
+          error "server must be a plain base URL with no query, fragment, backslash or space, got '${INPUT_SERVER}'."
+          exit 1
+        fi
+        if [[ "$authority" == *@* ]]; then
+          error "server must not carry user info (an @ before the host), got '${INPUT_SERVER}'."
+          exit 1
+        fi
+        loopback_re='^(127\.0\.0\.1|localhost|\[::1\])(:[0-9]{1,5})?$'
+        host_re='^([A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\.)*[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(:[0-9]{1,5})?$'
+        loopback=false
+        if [[ "$authority" =~ $loopback_re ]]; then loopback=true; fi
+        if [ "$scheme" = http ] && ! $loopback; then
+          error "server must be an https:// URL (plain http only for a loopback install), got '${INPUT_SERVER}'."
+          exit 1
+        fi
+        if [ "$scheme" = https ] && ! $loopback && ! [[ "$authority" =~ $host_re ]]; then
+          error "server must name a host and an optional port, got '${INPUT_SERVER}'."
+          exit 1
+        fi
         # The token is a header value; a newline or quote would break the
         # curl config it is passed through.
         case "$LINRO_SIMULATION_TOKEN" in
@@ -336,16 +358,42 @@ runs:
         tls=()
         if [ -n "$INPUT_CA_CERT" ]; then tls=(--cacert "$INPUT_CA_CERT"); fi
 
-        # Separate "cannot reach the install" from "it refused". They need
+        # A loopback install is never reached through a proxy: curl would
+        # otherwise send the plain-http request, token included, to one set in
+        # http_proxy or ALL_PROXY. https follows the runner's proxy settings.
+        proxy=()
+        if $loopback; then proxy=(--noproxy '*'); fi
+
+        # One wall-clock deadline of 10 minutes for the whole download,
+        # retries included: each attempt gets whatever time is left. Retries
+        # are for transient failures only (refused or dropped connections, a
+        # timed-out attempt, 408/429/5xx), as curl's own --retry would.
+        # Separate "cannot reach the install" from "it refused": they need
         # opposite fixes. The token goes in a curl config read from stdin, so
         # it never appears in argv (`ps` on the runner).
-        set +e
-        http=$(printf 'header = "Authorization: Bearer %s"\n' "$LINRO_SIMULATION_TOKEN" |
-          curl -sS --retry 3 --retry-connrefused --max-time 600 --retry-max-time 600 -K - ${tls[@]+"${tls[@]}"} \
-            -H "X-Linro-Client: simulation-github-action/${ACTION_REF:-dev}" \
-            -D "$headers" -o "$tarball" -w '%{http_code}' "$url")
-        rc=$?
-        set -e
+        deadline=$(( $(date +%s) + 600 ))
+        attempt=0
+        while :; do
+          attempt=$((attempt + 1))
+          left=$(( deadline - $(date +%s) ))
+          if [ "$left" -le 0 ]; then rc=28; break; fi
+          set +e
+          http=$(printf 'header = "Authorization: Bearer %s"\n' "$LINRO_SIMULATION_TOKEN" |
+            curl -sS --max-time "$left" -K - ${tls[@]+"${tls[@]}"} ${proxy[@]+"${proxy[@]}"} \
+              -H "X-Linro-Client: simulation-github-action/${ACTION_REF:-dev}" \
+              -D "$headers" -o "$tarball" -w '%{http_code}' "$url")
+          rc=$?
+          set -e
+          transient=false
+          case "$rc" in
+            7|28|52|55|56) transient=true ;;
+            0) case "$http" in 408|429|500|502|503|504) transient=true ;; esac ;;
+          esac
+          if ! $transient || [ "$attempt" -ge 4 ]; then break; fi
+          pause=$(( attempt * 2 ))
+          if [ $(( deadline - $(date +%s) )) -le "$pause" ]; then break; fi
+          sleep "$pause"
+        done
 
         if [ "$rc" -ne 0 ]; then
           error "could not reach ${server} (curl exit ${rc}). This is a network or TLS failure, not a missing version."

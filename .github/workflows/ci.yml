@@ -299,6 +299,89 @@ jobs:
         if: always()
         run: testdata/expect-refusal.sh "dry run without a server" "${{ steps.dry-no-server.outcome }}" "the server input is required"
 
+      - name: A server with user info is refused
+        id: userinfo
+        continue-on-error: true
+        uses: ./
+        with:
+          plan: testdata/plan.json
+          server: "https://user@acme.example"
+          token: ci-token
+          dry-run: "true"
+      - name: "Check: user info"
+        if: always()
+        run: testdata/expect-refusal.sh "user info" "${{ steps.userinfo.outcome }}" "must not carry user info"
+
+      - name: A loopback prefix with user info is refused
+        id: userinfo-loopback
+        continue-on-error: true
+        uses: ./
+        with:
+          plan: testdata/plan.json
+          server: "http://127.0.0.1:80@evil.example"
+          token: ci-token
+          dry-run: "true"
+      - name: "Check: loopback user info"
+        if: always()
+        run: testdata/expect-refusal.sh "loopback user info" "${{ steps.userinfo-loopback.outcome }}" "must not carry user info"
+
+      - name: A host that only starts with localhost is not loopback
+        id: localhost-suffix
+        continue-on-error: true
+        uses: ./
+        with:
+          plan: testdata/plan.json
+          server: "http://localhost.evil.com"
+          token: ci-token
+          dry-run: "true"
+      - name: "Check: localhost suffix"
+        if: always()
+        run: testdata/expect-refusal.sh "localhost suffix" "${{ steps.localhost-suffix.outcome }}" "plain http only for a loopback install"
+
+      - name: A host that only starts with 127.0.0.1 is not loopback
+        id: ip-suffix
+        continue-on-error: true
+        uses: ./
+        with:
+          plan: testdata/plan.json
+          server: "http://127.0.0.1.nip.io"
+          token: ci-token
+          dry-run: "true"
+      - name: "Check: 127.0.0.1 suffix"
+        if: always()
+        run: testdata/expect-refusal.sh "127.0.0.1 suffix" "${{ steps.ip-suffix.outcome }}" "plain http only for a loopback install"
+
+      - name: An IPv6 loopback with user info is refused
+        id: ipv6-userinfo
+        continue-on-error: true
+        uses: ./
+        with:
+          plan: testdata/plan.json
+          server: "http://[::1]@evil.example"
+          token: ci-token
+          dry-run: "true"
+      - name: "Check: [::1] user info"
+        if: always()
+        run: testdata/expect-refusal.sh "[::1] user info" "${{ steps.ipv6-userinfo.outcome }}" "must not carry user info"
+
+      # Not a refusal: with every proxy variable pointing at a closed port, the
+      # loopback stand-in is still reached, so the request (and its token)
+      # did not go through the proxy.
+      - name: A loopback install is reached past a proxy
+        uses: ./
+        env:
+          http_proxy: http://127.0.0.1:9
+          HTTP_PROXY: http://127.0.0.1:9
+          https_proxy: http://127.0.0.1:9
+          HTTPS_PROXY: http://127.0.0.1:9
+          ALL_PROXY: http://127.0.0.1:9
+          all_proxy: http://127.0.0.1:9
+        with:
+          plan: testdata/plan.json
+          server: ${{ steps.stub.outputs.url }}
+          token: ci-token
+          dry-run: "true"
+
       - name: A token the install refuses is refused
         id: wrong-token
         continue-on-error: true

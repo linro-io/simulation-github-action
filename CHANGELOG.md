@@ -14,13 +14,16 @@ downloads, and a customer's CI has no marketplace key; it has a Linro PAT.
 - **Breaking:** `server` and `token` are required on every run, dry runs
   included.
 - **Breaking:** the `marketplace-url` input is removed.
-- `server` must be `https://`, or plain `http://` to a loopback install, so the
-  token never crosses the network in clear.
+- `server` must be `https://`, or plain `http://` to exactly `127.0.0.1`,
+  `localhost` or `[::1]` (optional port), so the token never crosses the
+  network in clear. User info, a query or a fragment in `server` is refused.
+  A loopback install is never reached through a proxy; https follows the
+  runner's proxy settings.
 - A refused token (401), a token without `SCOPE_SIMULATIONS` (403), an
   unknown version (404) and an unreachable install are reported separately.
 - `version` is checked before any request (a semver or an alias such as
-  `latest`), and the whole download, retries included, is bounded at 10
-  minutes.
+  `latest`), and the whole download, retries included, has one 10-minute
+  wall-clock deadline.
 - `ca-cert` also applies to the CLI download, where it replaces the system
   roots.
 

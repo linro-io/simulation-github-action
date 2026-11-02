@@ -47,6 +47,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             body = urllib.request.urlopen(req, timeout=120).read()
         except urllib.error.HTTPError as e:
             return self.send_error(404 if e.code in (404, 410) else 502)
+        except OSError:
+            return self.send_error(502)
         sha = hashlib.sha256(body).hexdigest()
         self.send_response(200)
         self.send_header("Content-Type", "application/gzip")
