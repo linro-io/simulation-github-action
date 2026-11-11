@@ -1,8 +1,16 @@
-# The action's own CI uses third-party actions; keep them current. There is no
-# other dependency surface — a composite action ships no lockfile and no image.
+# Maintained dependency coverage; generated reports stay outside Git.
 version: 2
 updates:
-  - package-ecosystem: github-actions
-    directory: "/"
-    schedule:
-      interval: weekly
+- package-ecosystem: github-actions
+  directory: /
+  schedule:
+    interval: weekly
+  open-pull-requests-limit: 3
+  groups:
+    github-actions-minor-patch:
+      applies-to: version-updates
+      patterns:
+      - '*'
+      update-types:
+      - minor
+      - patch
