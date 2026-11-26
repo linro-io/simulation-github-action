@@ -5,7 +5,8 @@ It serves GET /api/simulator/download/{version}/{os}-{arch}.tar.gz the way an
 install does (Authorization: Bearer <token>, X-Linro-Sha256), so the action's
 download is tested with no install. The tarball itself comes from the
 marketplace, which requires an API key on /artifacts: STUB_SOURCE_KEY, an
-lmk_ key scoped artifacts:read, sent only to STUB_SOURCE.
+lmk_ key scoped artifacts:read, sent to STUB_SOURCE and not to the object
+store it redirects to.
 
     stub-install.py <port-file> <request-log>
 
@@ -42,12 +43,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
         req = urllib.request.Request(
             f"{SOURCE}/artifacts/simulators/linro-simulator/{version}/{platform}.tar.gz",
             # A User-Agent of its own: the default Python-urllib one is refused.
-            headers={
-                "Authorization": "Bearer " + SOURCE_KEY,
-                "X-Linro-Client": "simulation-github-action/ci-stub",
-                "User-Agent": "linro-ci-stub/1",
-            },
+            headers={"X-Linro-Client": "simulation-github-action/ci-stub", "User-Agent": "linro-ci-stub/1"},
         )
+        # The marketplace answers with a 302 to a presigned object-store URL.
+        # Unredirected: the key goes to the marketplace only. urllib copies
+        # ordinary headers onto the redirect, which hands the key to the store,
+        # and the store refuses a presigned GET that carries a second credential.
+        req.add_unredirected_header("Authorization", "Bearer " + SOURCE_KEY)
         try:
             body = urllib.request.urlopen(req, timeout=120).read()
         except urllib.error.HTTPError as e:
