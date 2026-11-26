@@ -218,7 +218,7 @@ inputs:
   # ---- where the CLI comes from -------------------------------------------
   version:
     description: >-
-      linro-simulator version to run, e.g. v0.2.1, or `latest` to track the
+      linro-simulator version to run, e.g. v0.6.44, or `latest` to track the
       newest version the marketplace serves your install. Pinning is recommended: `latest`
       makes a green run stop being evidence about any particular version.
 
@@ -226,7 +226,7 @@ inputs:
       that exists in staging but not production would 404 on every customer's
       first run, which is the worst possible first impression.
     required: false
-    default: "v0.2.1"
+    default: "v0.6.44"
 
 outputs:
   version:
@@ -344,7 +344,7 @@ runs:
         # latest); anything else would only come back as a confusing 404.
         version_re='^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$'
         if ! [[ "$version" =~ $version_re ]]; then
-          error "the version input '${INPUT_VERSION}' is not a version: expected e.g. v0.2.1, 0.2.1 or latest."
+          error "the version input '${INPUT_VERSION}' is not a version: expected e.g. v0.6.44, 0.6.44 or latest."
           exit 1
         fi
         url="${server}/api/simulator/download/${version}/${os}-${arch}.tar.gz"

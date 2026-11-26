@@ -121,7 +121,7 @@ below.
 
 | Input | Default | What it does |
 |---|---|---|
-| `version` | `v0.2.1` | CLI version to run, or `latest`. |
+| `version` | `v0.6.44` | CLI version to run, or `latest`. |
 
 Outputs: `version` (the CLI version that ran) and `binary-path`.
 
