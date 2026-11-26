@@ -2,13 +2,18 @@
 # claim to support, against the real marketplace.
 #
 # The whole test runs on `dry-run: true` against a stand-in install
-# (testdata/stub-install.py on loopback), so it needs NO Linro install, NO real
-# token, and no secrets at all. That is deliberate — a test that needs a
-# credential is a test that stops running the moment the credential lapses,
-# and this one has to keep working on forks and on Dependabot branches. The
-# stand-in serves the install's download route (bearer token, X-Linro-Sha256)
-# and takes the tarball from the public marketplace; once the marketplace
-# requires a key for /artifacts, it needs one too.
+# (testdata/stub-install.py on loopback), so it needs NO Linro install and NO
+# real token. The stand-in serves the install's download route (bearer token,
+# X-Linro-Sha256) and takes the real tarball from the marketplace, which
+# requires an API key on /artifacts. That key is the one secret here:
+# MARKETPLACE_ARTIFACTS_KEY, an lmk_ key scoped artifacts:read only, set as
+# both an Actions and a Dependabot secret. It reaches only the steps that
+# start the stand-in, and the stand-in sends it only to the marketplace.
+#
+# Pull requests from forks get no secrets, so the jobs that download are
+# skipped there (fork-notice says so) rather than failing on a missing key.
+# Everywhere else a missing or lapsed key fails loudly: a 502 from the
+# stand-in, or start-stub.sh naming the secret.
 #
 # What it does NOT cover, and cannot without an install: that a submission is
 # accepted and comes back as a check run. That path is exercised continuously
@@ -90,11 +95,21 @@ jobs:
           sys.exit(1 if undeclared or unwired else 0)
           PY
 
+  # A fork's pull request gets no secrets, so the jobs that download the
+  # simulator are skipped. Say so, rather than leave three silently skipped
+  # jobs to read as a pass.
+  fork-notice:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "::warning::simulate, multi-source and refusals were skipped. A fork's pull request gets no MARKETPLACE_ARTIFACTS_KEY, which they need to download the simulator. A maintainer reruns them from a branch in this repository."
+
   # The action end to end, on every platform its download step claims to
   # support. If the marketplace ever stops publishing one of these builds, this
   # is where it surfaces — as a 404 naming the platform, not as a customer's
   # broken pipeline.
   simulate:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     strategy:
       fail-fast: false
       matrix:
@@ -103,9 +118,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Assigned first: in `echo "url=$(…)"` the echo's status hides a stub
+      # that failed to start.
       - name: Start a stand-in install
         id: stub
-        run: echo "url=$(testdata/start-stub.sh stub ok)" >> "$GITHUB_OUTPUT"
+        env:
+          STUB_SOURCE_KEY: ${{ secrets.MARKETPLACE_ARTIFACTS_KEY }}
+        run: |
+          url=$(testdata/start-stub.sh stub ok)
+          echo "url=$url" >> "$GITHUB_OUTPUT"
 
       - name: Simulate a fixture plan (no install, no real token)
         id: sim
@@ -144,13 +165,18 @@ jobs:
   # silently dropped every source but the last would still exit 0 here, and
   # that is exactly the bug this input shape invites.
   multi-source:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
       - name: Start a stand-in install
         id: stub
-        run: echo "url=$(testdata/start-stub.sh stub ok)" >> "$GITHUB_OUTPUT"
+        env:
+          STUB_SOURCE_KEY: ${{ secrets.MARKETPLACE_ARTIFACTS_KEY }}
+        run: |
+          url=$(testdata/start-stub.sh stub ok)
+          echo "url=$url" >> "$GITHUB_OUTPUT"
 
       - name: Terraform AND Pulumi, one simulation
         uses: ./
@@ -233,17 +259,23 @@ jobs:
 
   # Failure modes are a feature: each of these must fail, and say why.
   refusals:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
       - name: Start stand-in installs
         id: stub
+        env:
+          STUB_SOURCE_KEY: ${{ secrets.MARKETPLACE_ARTIFACTS_KEY }}
         run: |
+          url=$(testdata/start-stub.sh stub ok)
+          bad_sha=$(testdata/start-stub.sh stub-bad-sha bad-sha)
+          no_sha=$(testdata/start-stub.sh stub-no-sha no-sha)
           {
-            echo "url=$(testdata/start-stub.sh stub ok)"
-            echo "bad-sha=$(testdata/start-stub.sh stub-bad-sha bad-sha)"
-            echo "no-sha=$(testdata/start-stub.sh stub-no-sha no-sha)"
+            echo "url=$url"
+            echo "bad-sha=$bad_sha"
+            echo "no-sha=$no_sha"
           } >> "$GITHUB_OUTPUT"
 
       # Each case must fail AND for its own reason (testdata/expect-refusal.sh

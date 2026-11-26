@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 # Start testdata/stub-install.py in the background and print its URL.
 #   start-stub.sh <name> <mode>   (token: ci-token; log: $RUNNER_TEMP/<name>.log)
+# Needs STUB_SOURCE_KEY: the stub downloads from the marketplace with it.
 set -euo pipefail
 name=$1 mode=$2
+if [ -z "${STUB_SOURCE_KEY:-}" ]; then
+  echo "::error::STUB_SOURCE_KEY is empty. Set the MARKETPLACE_ARTIFACTS_KEY secret (Actions and Dependabot): a Marketplace lmk_ key scoped artifacts:read." >&2
+  exit 1
+fi
 port_file="${RUNNER_TEMP}/${name}.port"
 rm -f "$port_file"
 STUB_TOKEN=ci-token STUB_MODE="$mode" nohup python3 "$(dirname "$0")/stub-install.py" \
