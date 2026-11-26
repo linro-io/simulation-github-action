@@ -3,14 +3,15 @@
 
 It serves GET /api/simulator/download/{version}/{os}-{arch}.tar.gz the way an
 install does (Authorization: Bearer <token>, X-Linro-Sha256), so the action's
-download is tested with no install and no secret. The tarball itself comes
-from the public marketplace, anonymously; once the marketplace requires a key
-for /artifacts this needs one too.
+download is tested with no install. The tarball itself comes from the
+marketplace, which requires an API key on /artifacts: STUB_SOURCE_KEY, an
+lmk_ key scoped artifacts:read, sent to STUB_SOURCE and not to the object
+store it redirects to.
 
     stub-install.py <port-file> <request-log>
 
 Environment: STUB_TOKEN (the token to accept), STUB_MODE (ok | bad-sha |
-no-sha), STUB_SOURCE (marketplace base URL).
+no-sha), STUB_SOURCE (marketplace base URL), STUB_SOURCE_KEY (marketplace key).
 """
 import hashlib
 import http.server
@@ -23,6 +24,7 @@ import urllib.request
 TOKEN = os.environ["STUB_TOKEN"]
 MODE = os.environ.get("STUB_MODE", "ok")
 SOURCE = os.environ.get("STUB_SOURCE", "https://marketplace.linro.io").rstrip("/")
+SOURCE_KEY = os.environ["STUB_SOURCE_KEY"]
 PATH = re.compile(r"^/api/simulator/download/([A-Za-z0-9][A-Za-z0-9._+-]{0,63})/([a-z0-9]+-[a-z0-9]+)\.tar\.gz$")
 port_file, log_file = sys.argv[1], sys.argv[2]
 
@@ -43,6 +45,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # A User-Agent of its own: the default Python-urllib one is refused.
             headers={"X-Linro-Client": "simulation-github-action/ci-stub", "User-Agent": "linro-ci-stub/1"},
         )
+        # The marketplace answers with a 302 to a presigned object-store URL.
+        # Unredirected: the key goes to the marketplace only. urllib copies
+        # ordinary headers onto the redirect, which hands the key to the store,
+        # and the store refuses a presigned GET that carries a second credential.
+        req.add_unredirected_header("Authorization", "Bearer " + SOURCE_KEY)
         try:
             body = urllib.request.urlopen(req, timeout=120).read()
         except urllib.error.HTTPError as e:
